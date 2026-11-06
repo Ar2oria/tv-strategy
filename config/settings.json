@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "revision": 4,
+  "markets": {
+    "a_share": {
+      "provider": "akshare",
+      "history_years": 10,
+      "symbols": [],
+      "request_timeout_seconds": 20.0,
+      "max_retries": 3,
+      "concurrency": 1,
+      "overlap_days": 45
+    },
+    "hk_stock": {
+      "provider": "akshare",
+      "history_years": 10,
+      "symbols": [],
+      "request_timeout_seconds": 20.0,
+      "max_retries": 3,
+      "concurrency": 1,
+      "overlap_days": 45
+    },
+    "us_stock": {
+      "provider": "yfinance",
+      "history_years": 10,
+      "symbols": [],
+      "request_timeout_seconds": 20.0,
+      "max_retries": 3,
+      "concurrency": 1,
+      "overlap_days": 45
+    },
+    "crypto": {
+      "provider": "binance",
+      "history_years": null,
+      "symbols": [
+        {
+          "exchange": "binance",
+          "symbol": "BTC/USDT"
+        },
+        {
+          "exchange": "binance",
+          "symbol": "ETH/USDT"
+        }
+      ],
+      "request_timeout_seconds": 20.0,
+      "max_retries": 3,
+      "concurrency": 1,
+      "overlap_days": 45
+    }
+  },
+  "timezone": "UTC",
+  "indicators": {
+    "max_active_indicators": 20
+  },
+  "tasks": {
+    "system.purge_task_history": {
+      "enabled": false,
+      "cron": "0 0 * * *",
+      "params": {}
+    },
+    "market.sync_universes": {
+      "enabled": false,
+      "cron": "0 0 * * *",
+      "params": {}
+    },
+    "market.sync_a_daily": {
+      "enabled": false,
+      "cron": "0 0 * * *",
+      "params": {}
+    },
+    "market.sync_hk_daily": {
+      "enabled": false,
+      "cron": "0 0 * * *",
+      "params": {}
+    },
+    "market.sync_us_daily": {
+      "enabled": false,
+      "cron": "0 0 * * *",
+      "params": {}
+    },
+    "market.sync_crypto_daily": {
+      "enabled": false,
+      "cron": "0 0 * * *",
+      "params": {}
+    }
+  }
+}

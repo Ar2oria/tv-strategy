@@ -8,3 +8,25 @@
 # Logs and temporary files
 *.log
 *.tmp
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+
+# Downloaded market data (reports remain tracked)
+python_validation/data/
+
+# Node (frontend has its own tree)
+node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+frontend/playwright/.cache/
+
+# Local runtime state
+data/

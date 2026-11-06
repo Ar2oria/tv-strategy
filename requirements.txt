@@ -1,0 +1,6 @@
+# Tested with the workspace's Python 3.12 runtime.
+pandas>=2.2
+numpy>=1.26
+
+# Optional: needed only for automatic Yahoo downloads without a cache or --asset-csv.
+yfinance>=0.2.54
