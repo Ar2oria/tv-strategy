@@ -104,6 +104,95 @@ test.describe("chart analysis journey", () => {
     await expect.poll(() => requested).toContain("1M");
   });
 
+  test("keeps chart geometry stable while loading in the info band", async ({
+    page,
+  }) => {
+    const state = createState();
+    await installApiRoutes(page, state);
+    await page.route("**/api/v1/bars?**", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      await route.fallback();
+    });
+    await page.goto("/analysis");
+    await page.getByRole("combobox", { name: "股票搜索" }).fill("AAA");
+    await page.getByText("AAA · Alpha Corp").click();
+    const chart = page.getByTestId("financial-chart");
+    await expect(chart).toBeVisible();
+    const before = await chart.boundingBox();
+    expect(before).not.toBeNull();
+
+    await page.getByText("月线", { exact: true }).click();
+    const loading = page.getByTestId("financial-chart-loading");
+    await expect(loading).toBeVisible();
+    await expect(loading).toHaveText("正在加载历史数据");
+    await expect(loading).toHaveCSS("height", "48px");
+    await expect(loading).toHaveCSS("position", "relative");
+    expect(
+      await loading.evaluate(
+        (element) => element.parentElement?.dataset.testid,
+      ),
+    ).toBe("financial-chart-info");
+    const during = await chart.boundingBox();
+    expect(during).not.toBeNull();
+    expect({ height: during?.height, y: during?.y }).toEqual({
+      height: before?.height,
+      y: before?.y,
+    });
+
+    await expect(loading).toHaveCount(0);
+    const after = await chart.boundingBox();
+    expect(after).not.toBeNull();
+    expect({ height: after?.height, y: after?.y }).toEqual({
+      height: before?.height,
+      y: before?.y,
+    });
+  });
+
+  test("keeps candles uncovered during older-history loading", async ({ page }) => {
+    const state = createState();
+    await installApiRoutes(page, state);
+    await page.route("**/api/v1/bars?**", async (route) => {
+      const url = new URL(route.request().url());
+      if (url.searchParams.has("end")) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+      }
+      await route.fallback();
+    });
+    await page.goto("/analysis");
+    await page.getByRole("combobox", { name: "股票搜索" }).fill("AAA");
+    await page.getByText("AAA · Alpha Corp").click();
+    const chart = page.getByTestId("financial-chart");
+    await expect(chart).toBeVisible();
+    const before = await chart.boundingBox();
+    expect(before).not.toBeNull();
+    const plot = page.getByTestId("financial-chart-plot");
+    const plotBox = await plot.boundingBox();
+    expect(plotBox).not.toBeNull();
+    if (plotBox !== null) {
+      await page.mouse.move(
+        plotBox.x + plotBox.width / 2,
+        plotBox.y + plotBox.height / 2,
+      );
+      await page.mouse.wheel(0, 500);
+    }
+    const loading = page.getByTestId("financial-chart-loading");
+    await expect(loading).toBeVisible();
+    await expect(loading).toHaveCSS("position", "relative");
+    const during = await chart.boundingBox();
+    expect(during).not.toBeNull();
+    expect({ height: during?.height, y: during?.y }).toEqual({
+      height: before?.height,
+      y: before?.y,
+    });
+    await expect(loading).toHaveCount(0);
+    const after = await chart.boundingBox();
+    expect(after).not.toBeNull();
+    expect({ height: after?.height, y: after?.y }).toEqual({
+      height: before?.height,
+      y: before?.y,
+    });
+  });
+
   test("shows empty-database guidance instead of a blank chart", async ({
     page,
   }) => {

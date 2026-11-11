@@ -216,7 +216,7 @@ describe("SettingsPage", { timeout: 20000 }, () => {
     expect(
       await screen.findByText(/配置已被其他页面修改/),
     ).toBeInTheDocument();
-    expect(await screen.findByText(/当前修订号：5/)).toBeInTheDocument();
+    expect(screen.queryByText(/当前修订号/)).not.toBeInTheDocument();
     expect(puts()).toHaveLength(1);
   });
 

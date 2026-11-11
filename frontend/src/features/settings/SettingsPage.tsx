@@ -132,9 +132,6 @@ export function SettingsPage() {
 
   return (
     <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-      <Typography.Text type="secondary">
-        保存后立即生效，无需重启后端。当前修订号：{draft.revision}
-      </Typography.Text>
       {markets.length === 0 ? (
         <Empty description="配置中没有可选市场" />
       ) : (

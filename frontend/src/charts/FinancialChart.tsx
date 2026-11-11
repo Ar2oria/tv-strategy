@@ -37,6 +37,8 @@ export interface FinancialChartProps {
   toolbar?: ReactNode;
   /** Empty, loading, or error content shown in place of the live canvas. */
   stateContent?: ReactNode;
+  /** Short-lived status shown in the chart information band, never over candles. */
+  loadingContent?: ReactNode;
   mode?: ChartMode;
   onNearLeftEdge?: () => void;
   /** Symbol shown in the in-chart legend. */
@@ -151,6 +153,7 @@ export function FinancialChart({
   computations,
   toolbar,
   stateContent,
+  loadingContent,
   mode = "dark",
   onNearLeftEdge,
   symbol = "",
@@ -163,6 +166,7 @@ export function FinancialChart({
   const [paneLayouts, setPaneLayouts] = useState<ChartPaneLayout[]>([]);
   const measured = useMeasuredBox();
   const hasStateContent = stateContent !== undefined && stateContent !== null;
+  const hasLoadingContent = loadingContent !== undefined && loadingContent !== null;
   const { model, failure } = useChartModel(bars, computations);
   const active =
     !hasStateContent && bars.length > 0 && failure === null && model !== null;
@@ -295,18 +299,36 @@ export function FinancialChart({
             height: "var(--chart-height)",
           } as CSSProperties}
         >
-          {active ? (
+          {active || hasLoadingContent ? (
             <div
               data-testid="financial-chart-info"
               style={{ flex: "0 0 auto", position: "relative", zIndex: 3 }}
             >
-              <ChartHeader
-                symbol={symbol}
-                timeframe={timeframe}
-                bar={activeBar}
-                hovering={visibleHover !== null}
-                theme={theme}
-              />
+              {hasLoadingContent ? (
+                <div
+                  data-testid="financial-chart-loading"
+                  style={{
+                    position: "relative",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    height: 48,
+                    color: theme.textSecondary,
+                    fontSize: 12,
+                    pointerEvents: "none",
+                  }}
+                >
+                  {loadingContent}
+                </div>
+              ) : (
+                <ChartHeader
+                  symbol={symbol}
+                  timeframe={timeframe}
+                  bar={activeBar}
+                  hovering={visibleHover !== null}
+                  theme={theme}
+                />
+              )}
               {mainLegend === null ? null : (
                 <div
                   style={{

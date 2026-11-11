@@ -279,11 +279,9 @@ export function AnalysisPage() {
         void barsQuery.refetch();
       }}
     />
-  ) : barsQuery.isPending ? (
-    <div style={{ padding: 48, textAlign: "center" }}>
-      <Spin />
-    </div>
   ) : null;
+  const loadingContent =
+    barsQuery.isPending || loadingMore ? "正在加载历史数据" : null;
 
   return (
     <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
@@ -307,18 +305,9 @@ export function AnalysisPage() {
           description={pagingError}
         />
       )}
-      {loadingMore ? (
-        <Alert type="info" showIcon title="正在加载更早的历史…" />
-      ) : null}
       {/* Reserved height keeps the chart from jumping when the hint
           disappears after the first indicator is added. */}
-      <div style={{ minHeight: 22 }}>
-        {chartState === null && instances.length === 0 ? (
-          <Typography.Text type="secondary">
-            尚未添加指标。点击「添加指标」从后端可用指标中选择。
-          </Typography.Text>
-        ) : null}
-      </div>
+      <div style={{ minHeight: 22 }} />
       <Suspense fallback={<Spin />}>
         <FinancialChart
           bars={loadedBars}
@@ -326,6 +315,7 @@ export function AnalysisPage() {
           symbol={instrument?.symbol ?? ""}
           timeframe={timeframe}
           stateContent={chartState}
+          loadingContent={loadingContent}
           toolbar={
             <ChartToolbar
               instruments={instruments}

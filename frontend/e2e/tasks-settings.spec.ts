@@ -296,7 +296,7 @@ test.describe("settings journey", () => {
     expect(second.request().postDataJSON().markets.a_share.request_timeout_seconds).toBe(30);
     expect(second.request().postDataJSON().markets.hk_stock.request_timeout_seconds).toBe(40);
     await expect(page.getByText("设置已保存并立即生效。")).toBeVisible();
-    await expect(page.getByText(/当前修订号：7/)).toBeVisible();
+    await expect(page.getByText(/当前修订号/)).toHaveCount(0);
   });
 
   test("keeps unsaved edits after a revision conflict and reloads the newest revision", async ({
@@ -312,6 +312,6 @@ test.describe("settings journey", () => {
     await page.getByRole("button", { name: "保存 A 股" }).click();
 
     await expect(page.getByText(/配置已被其他页面修改/)).toBeVisible();
-    await expect(page.getByText(/当前修订号：6/)).toBeVisible();
+    await expect(page.getByText(/当前修订号/)).toHaveCount(0);
   });
 });

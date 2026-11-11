@@ -238,16 +238,13 @@ describe("AnalysisPage", { timeout: 20000 }, () => {
     expect(within(chart).getByRole("button", { name: "添加指标" })).toBeInTheDocument();
   });
 
-  it("loads bars and descriptors, then renders the empty indicator state", async () => {
+  it("loads bars and descriptors without an indicator hint", async () => {
     renderApp();
 
     await selectInstrument();
 
     await waitFor(() => expect(computeRequests()).toHaveLength(0));
-    expect(
-      await screen.findByText("尚未添加指标。点击「添加指标」从后端可用指标中选择。"),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/尚未添加指标/)).toBeInTheDocument();
+    expect(screen.queryByText(/尚未添加指标/)).not.toBeInTheDocument();
     expect(
       await screen.findByTestId("financial-chart"),
     ).toBeInTheDocument();
