@@ -165,10 +165,14 @@ test.describe("chart analysis journey", () => {
     await expect(chart).toBeVisible();
     const before = await chart.boundingBox();
     expect(before).not.toBeNull();
+    const olderRequest = page.waitForRequest(
+      (request) => new URL(request.url()).searchParams.has("end"),
+    );
     const plot = page.getByTestId("financial-chart-plot");
     const plotBox = await plot.boundingBox();
     expect(plotBox).not.toBeNull();
     if (plotBox !== null) {
+      await olderRequest;
       await page.mouse.move(
         plotBox.x + plotBox.width / 2,
         plotBox.y + plotBox.height / 2,
