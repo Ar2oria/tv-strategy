@@ -1,42 +1,26 @@
 import type {
-  CryptoSymbol,
   IndicatorSettings,
   MarketSettings,
   Settings,
   TaskSettings,
 } from "../../types/settings";
 import {
-  decodeArray,
   decodeBoolean,
   decodeFiniteNumber,
   decodeJsonObject,
   decodeLiteral,
   decodeNonNegativeInteger,
-  decodeNullable,
   decodePositiveInteger,
   decodeRecord,
   decodeRecordOf,
   decodeString,
 } from "../decoding";
 
-function decodeCryptoSymbol(value: unknown): CryptoSymbol {
-  const item = decodeRecord(value);
-  return {
-    exchange: decodeLiteral(item.exchange, ["binance", "okx"]),
-    symbol: decodeString(item.symbol),
-  };
-}
-
 function decodeMarketSettings(value: unknown): MarketSettings {
   const item = decodeRecord(value);
   return {
     provider: decodeString(item.provider),
-    history_years: decodeNullable(item.history_years, decodePositiveInteger),
-    symbols: decodeArray(item.symbols, decodeCryptoSymbol),
     request_timeout_seconds: decodeFiniteNumber(item.request_timeout_seconds),
-    max_retries: decodeNonNegativeInteger(item.max_retries),
-    concurrency: decodeLiteral(item.concurrency, [1]),
-    overlap_days: decodePositiveInteger(item.overlap_days),
   };
 }
 

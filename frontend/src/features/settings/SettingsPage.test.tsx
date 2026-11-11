@@ -87,8 +87,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function renderSettings() {
-  const router = createMemoryRouter(routes, { initialEntries: ["/settings"] });
+function renderSettings(path = "/settings") {
+  const router = createMemoryRouter(routes, { initialEntries: [path] });
   return render(
     <QueryClientProvider
       client={new QueryClient({
@@ -105,91 +105,113 @@ function puts(): Recorded[] {
 }
 
 describe("SettingsPage", { timeout: 20000 }, () => {
-  it("renders every market with its provider, fixed concurrency, and history depth", async () => {
+  it("renders only data-source controls for every market", async () => {
     renderSettings();
 
     expect(await screen.findByText("A 股")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "数据源配置" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "数据源配置" })).toBeInTheDocument();
+    expect(screen.getByText("A 股")).toBeInTheDocument();
     expect(screen.getByText("港股")).toBeInTheDocument();
     expect(screen.getByText("美股")).toBeInTheDocument();
     expect(screen.getByText("加密货币")).toBeInTheDocument();
-    expect(screen.getAllByText("并发固定为 1")).toHaveLength(4);
-    expect(screen.getAllByText("前复权")).toHaveLength(4);
+    expect(screen.getByLabelText("A 股 数据源")).toBeDisabled();
+    expect(screen.getByLabelText("A 股 请求超时")).toBeDisabled();
+    expect(screen.getByLabelText("加密货币 请求超时")).toBeDisabled();
+    expect(screen.getAllByRole("button", { name: /^编辑 / })).toHaveLength(4);
+    expect(screen.queryByRole("button", { name: "保存设置" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "放弃修改" })).not.toBeInTheDocument();
+    expect(screen.queryByText("历史深度（年）")).not.toBeInTheDocument();
+    expect(screen.queryByText("最大重试")).not.toBeInTheDocument();
+    expect(screen.queryByText("重叠天数")).not.toBeInTheDocument();
+    expect(screen.queryByText("并发固定为 1")).not.toBeInTheDocument();
+    expect(screen.queryByText("前复权")).not.toBeInTheDocument();
+    expect(screen.queryByText("调度时区")).not.toBeInTheDocument();
+    expect(screen.queryByText("最大启用指标数")).not.toBeInTheDocument();
   });
 
-  it("shows exchange-qualified spot pairs instead of bare symbols", async () => {
+  it("also renders the data-source subroute", async () => {
+    renderSettings("/settings/data-sources");
+
+    expect(await screen.findByText("A 股")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "数据源配置" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "数据源配置" })).toBeInTheDocument();
+  });
+
+  it("does not render market-level spot pair controls", async () => {
     renderSettings();
 
-    const symbol = await screen.findByLabelText("加密货币 交易对 1");
-    expect(symbol).toHaveValue("BTC/USDT");
-    expect(screen.getByLabelText("加密货币 第 1 个交易对的交易所")).toBeInTheDocument();
+    expect(await screen.findByLabelText("A 股 数据源")).toBeInTheDocument();
+    expect(screen.getByLabelText("加密货币 请求超时")).toBeInTheDocument();
+    expect(screen.queryByText(/现货交易对/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("添加交易对")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("加密货币 交易对 1")).not.toBeInTheDocument();
   });
 
-  it("saves provider, timeout, timezone, and crypto pairs with the revision", async () => {
+  it("saves each Group independently and preserves other unsaved Group edits", async () => {
+    state.settings.tasks["market.sync_crypto_daily"] = {
+      enabled: false,
+      cron: "0 0 * * *",
+      params: {
+        spot_pairs: [{ exchange: "binance", symbol: "BTC/USDT" }],
+      },
+    };
     renderSettings();
     await screen.findByText("美股");
-
-    const provider = await screen.findByLabelText("A 股 数据源");
+    await userEvent.click(screen.getByRole("button", { name: "编辑 A 股" }));
+    const provider = screen.getByLabelText("A 股 数据源");
     await userEvent.click(provider);
     await userEvent.click(await screen.findByTitle("baostock"));
-
-    const timezone = screen.getByLabelText("调度时区");
-    await userEvent.clear(timezone);
-    await userEvent.type(timezone, "Asia/Shanghai");
-
-    const timeout = screen.getByLabelText("A 股 请求超时");
-    await userEvent.clear(timeout);
-    await userEvent.type(timeout, "30");
-
-    const symbol = screen.getByLabelText("加密货币 交易对 1");
-    await userEvent.clear(symbol);
-    await userEvent.type(symbol, "ETH/USDT");
-
-    await userEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    await userEvent.clear(screen.getByLabelText("A 股 请求超时"));
+    await userEvent.type(screen.getByLabelText("A 股 请求超时"), "30");
+    await userEvent.click(screen.getByRole("button", { name: "编辑 港股" }));
+    await userEvent.clear(screen.getByLabelText("港股 请求超时"));
+    await userEvent.type(screen.getByLabelText("港股 请求超时"), "40");
+    await userEvent.click(screen.getByRole("button", { name: "保存 A 股" }));
 
     await waitFor(() => expect(puts()).toHaveLength(1));
-    const body = puts()[0].body as {
+    const first = puts()[0].body as {
       expected_revision: number;
-      timezone: string;
-      markets: Record<string, { provider: string; request_timeout_seconds: number; symbols: unknown[] }>;
+      markets: Record<string, { provider: string; request_timeout_seconds: number }>;
+      tasks: Settings["tasks"];
     };
-    expect(body.expected_revision).toBe(4);
-    expect(body.timezone).toBe("Asia/Shanghai");
-    expect(body.markets.a_share.provider).toBe("baostock");
-    expect(body.markets.a_share.request_timeout_seconds).toBe(30);
-    expect(body.markets.crypto.symbols).toEqual([
-      { exchange: "binance", symbol: "ETH/USDT" },
-    ]);
-    expect(await screen.findByText("设置已保存并立即生效。")).toBeInTheDocument();
-  });
-
-  it("adds and removes crypto spot pairs", async () => {
-    renderSettings();
-    await screen.findByText("加密货币");
-
-    await userEvent.click(screen.getByLabelText("添加交易对"));
-    const second = await screen.findByLabelText("加密货币 交易对 2");
-    await userEvent.type(second, "SOL/USDT");
-    await userEvent.click(screen.getByRole("button", { name: "保存设置" }));
-
-    await waitFor(() => expect(puts()).toHaveLength(1));
-    const body = puts()[0].body as {
-      markets: { crypto: { symbols: Array<{ exchange: string; symbol: string }> } };
-    };
-    expect(body.markets.crypto.symbols).toEqual([
+    expect(first.expected_revision).toBe(4);
+    expect(first.markets.a_share.provider).toBe("baostock");
+    expect(first.markets.a_share.request_timeout_seconds).toBe(30);
+    expect(first.markets.hk_stock.request_timeout_seconds).toBe(20);
+    expect(first.tasks["market.sync_crypto_daily"].params.spot_pairs).toEqual([
       { exchange: "binance", symbol: "BTC/USDT" },
-      { exchange: "binance", symbol: "SOL/USDT" },
     ]);
+    for (const market of Object.values(first.markets)) {
+      expect(market).not.toHaveProperty("symbols");
+    }
+    expect(screen.getByLabelText("港股 请求超时")).toHaveValue("40.0");
+    expect(screen.getByLabelText("港股 请求超时")).toBeEnabled();
+    expect(screen.getByLabelText("A 股 请求超时")).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "保存 港股" }));
+    await waitFor(() => expect(puts()).toHaveLength(2));
+    const second = puts()[1].body as {
+      expected_revision: number;
+      markets: Record<string, { provider: string; request_timeout_seconds: number }>;
+    };
+    expect(second.expected_revision).toBe(5);
+    expect(second.markets.a_share.provider).toBe("baostock");
+    expect(second.markets.a_share.request_timeout_seconds).toBe(30);
+    expect(second.markets.hk_stock.request_timeout_seconds).toBe(40);
+    expect(await screen.findByText("设置已保存并立即生效。")).toBeInTheDocument();
   });
 
   it("reloads the newest revision on 409 and asks the user to reapply", async () => {
     state.conflictOnce = true;
     renderSettings();
     await screen.findByText("美股");
+    await userEvent.click(screen.getByRole("button", { name: "编辑 A 股" }));
 
-    const timezone = screen.getByLabelText("调度时区");
-    await userEvent.clear(timezone);
-    await userEvent.type(timezone, "Europe/London");
-    await userEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    const timeout = screen.getByLabelText("A 股 请求超时");
+    await userEvent.clear(timeout);
+    await userEvent.type(timeout, "45");
+    await userEvent.click(screen.getByRole("button", { name: "保存 A 股" }));
 
     expect(
       await screen.findByText(/配置已被其他页面修改/),
@@ -202,8 +224,8 @@ describe("SettingsPage", { timeout: 20000 }, () => {
     state.rateLimited = true;
     renderSettings();
     await screen.findByText("美股");
-
-    await userEvent.click(screen.getByRole("button", { name: "保存设置" }));
+    await userEvent.click(screen.getByRole("button", { name: "编辑 A 股" }));
+    await userEvent.click(screen.getByRole("button", { name: "保存 A 股" }));
 
     expect(await screen.findByText(/请求过于频繁/)).toBeInTheDocument();
   });
@@ -211,13 +233,15 @@ describe("SettingsPage", { timeout: 20000 }, () => {
   it("discards local edits", async () => {
     renderSettings();
     await screen.findByText("美股");
+    await userEvent.click(screen.getByRole("button", { name: "编辑 A 股" }));
 
-    const timezone = screen.getByLabelText("调度时区");
-    await userEvent.clear(timezone);
-    await userEvent.type(timezone, "Europe/Paris");
-    await userEvent.click(screen.getByRole("button", { name: "放弃修改" }));
+    const timeout = screen.getByLabelText("A 股 请求超时");
+    await userEvent.clear(timeout);
+    await userEvent.type(timeout, "45");
+    await userEvent.click(screen.getByRole("button", { name: "放弃 A 股" }));
 
-    expect(screen.getByLabelText("调度时区")).toHaveValue("UTC");
+    expect(screen.getByLabelText("A 股 请求超时")).toHaveValue("20.0");
+    expect(screen.getByLabelText("A 股 请求超时")).toBeDisabled();
     expect(puts()).toHaveLength(0);
   });
 });

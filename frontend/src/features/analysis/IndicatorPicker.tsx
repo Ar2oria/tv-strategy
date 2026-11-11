@@ -122,5 +122,9 @@ export interface AddIndicatorButtonProps {
 }
 
 export function AddIndicatorButton({ onOpen }: AddIndicatorButtonProps) {
-  return <Button onClick={onOpen}>添加指标</Button>;
+  return (
+    <Button type="primary" onClick={onOpen}>
+      添加指标
+    </Button>
+  );
 }

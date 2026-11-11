@@ -16,7 +16,7 @@ from app.providers.registry import ProviderRegistry
 from app.repositories.bars import BarRepository
 from app.repositories.instruments import InstrumentRepository
 from app.repositories.task_runs import TaskRunRepository
-from app.services.bar_sync_service import SyncOutcome
+from app.services.bar_sync_service import BarSyncOptions, SyncOutcome
 from app.services.resources import RuntimeResources
 from app.services.universe_sync_service import UniverseSyncOutcome, UniverseSyncService
 from app.tasks.base import TaskContext
@@ -27,13 +27,23 @@ from tests.market_sync_fixtures import instrument_dto, market_config
 RAW_SECRET = "https://user:secret@example.test/private?api_key=supersecret"
 
 
-def settings_with(market: MarketSettings | None = None) -> Settings:
+def settings_with(
+    market: MarketSettings | BarSyncOptions | None = None,
+) -> Settings:
     settings = default_settings()
     if market is None:
         return settings
+    market_settings = (
+        market
+        if isinstance(market, MarketSettings)
+        else MarketSettings(
+            provider=market.provider,
+            request_timeout_seconds=market.request_timeout_seconds,
+        )
+    )
     return Settings.model_validate(
         settings.model_copy(
-            update={"markets": {**settings.markets, "us_stock": market}}
+            update={"markets": {**settings.markets, "us_stock": market_settings}}
         ).model_dump(mode="python")
     )
 

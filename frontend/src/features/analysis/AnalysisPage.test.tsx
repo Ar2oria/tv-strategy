@@ -16,10 +16,14 @@ vi.mock("../../charts/FinancialChart", () => ({
   FinancialChart: ({
     bars,
     computations,
+    toolbar,
+    stateContent,
     renderIndicatorLegend,
   }: {
     bars: unknown[];
     computations: Array<{ instance_id: string; error: string | null }>;
+    toolbar?: React.ReactNode;
+    stateContent?: React.ReactNode;
     renderIndicatorLegend?: (context: {
       hovered: null;
       latestBar: null;
@@ -27,6 +31,8 @@ vi.mock("../../charts/FinancialChart", () => ({
     }) => React.ReactNode;
   }) => (
     <div data-testid="financial-chart">
+      {toolbar}
+      {stateContent}
       <span>{bars.length} bars</span>
       {computations.map((item) => (
         <span key={item.instance_id}>
@@ -181,6 +187,30 @@ function computeRequests(): Array<{ indicators: Array<Record<string, unknown>> }
 }
 
 describe("AnalysisPage", { timeout: 20000 }, () => {
+  it("keeps all selectors inside the chart before an instrument is selected", async () => {
+    renderApp();
+
+    const chart = await screen.findByTestId("financial-chart");
+    expect(
+      within(chart).getByRole("combobox", { name: "股票搜索" }),
+    ).toBeInTheDocument();
+    expect(within(chart).getByRole("radiogroup", { name: "周期" })).toBeInTheDocument();
+    expect(within(chart).getByRole("button", { name: "添加指标" })).toBeInTheDocument();
+    expect(within(chart).queryByText("证券", { exact: true })).not.toBeInTheDocument();
+    expect(within(chart).getByText(/选择证券以加载 K 线/)).toBeInTheDocument();
+  });
+
+  it("allows clearing the selected instrument text for a new search", async () => {
+    renderApp();
+    await selectInstrument();
+    const search = screen.getByRole("combobox", { name: "股票搜索" });
+
+    await userEvent.clear(search);
+    expect(search).toHaveValue("");
+    await userEvent.type(search, "B");
+    expect(search).toHaveValue("B");
+  });
+
   it("guides the user to run a sync task when the database has no instruments", async () => {
     vi.stubGlobal(
       "fetch",
@@ -201,6 +231,11 @@ describe("AnalysisPage", { timeout: 20000 }, () => {
     expect(
       screen.getByText(/启用并立即执行证券列表与日线同步任务/),
     ).toBeInTheDocument();
+    const chart = await screen.findByTestId("financial-chart");
+    expect(
+      within(chart).getByRole("combobox", { name: "股票搜索" }),
+    ).toBeInTheDocument();
+    expect(within(chart).getByRole("button", { name: "添加指标" })).toBeInTheDocument();
   });
 
   it("loads bars and descriptors, then renders the empty indicator state", async () => {
@@ -376,6 +411,39 @@ describe("AnalysisPage", { timeout: 20000 }, () => {
     });
   });
 
+  it("keeps the chart toolbar usable while bars are loading", async () => {
+    const pendingBars = { release: (_response: Response): void => undefined };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.includes("/bars")) {
+          return new Promise<Response>((resolve) => {
+            pendingBars.release = resolve;
+          });
+        }
+        return respond({
+          url,
+          method: init?.method ?? "GET",
+          body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+        });
+      }),
+    );
+
+    renderApp();
+    await selectInstrument();
+    try {
+      const chart = await screen.findByTestId("financial-chart");
+      expect(
+        within(chart).getByRole("combobox", { name: "股票搜索" }),
+      ).toBeInTheDocument();
+      expect(within(chart).getByRole("radiogroup", { name: "周期" })).toBeInTheDocument();
+      expect(within(chart).getByRole("button", { name: "添加指标" })).toBeInTheDocument();
+    } finally {
+      pendingBars.release(success(BARS));
+    }
+  });
+
   it("shows a visible error when bars cannot be loaded", async () => {
     vi.stubGlobal(
       "fetch",
@@ -402,5 +470,11 @@ describe("AnalysisPage", { timeout: 20000 }, () => {
     expect(
       await screen.findByText("An internal error occurred"),
     ).toBeInTheDocument();
+    const chart = await screen.findByTestId("financial-chart");
+    expect(
+      within(chart).getByRole("combobox", { name: "股票搜索" }),
+    ).toBeInTheDocument();
+    expect(within(chart).getByRole("radiogroup", { name: "周期" })).toBeInTheDocument();
+    expect(within(chart).getByRole("button", { name: "添加指标" })).toBeInTheDocument();
   });
 });

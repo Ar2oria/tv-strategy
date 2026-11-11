@@ -19,9 +19,11 @@ import {
 import { useEffect, useRef } from "react";
 
 import { buildHover } from "./adapter";
+import { getSecondaryPaneHeights } from "./chartLayout";
 import type {
   ChartHover,
   ChartModel,
+  ChartPaneLayout,
   ChartSeriesBinding,
 } from "./types";
 import { CANDLE_SERIES_KEY } from "./types";
@@ -38,13 +40,15 @@ const MAIN_PANE_INDEX = 0;
 /** Share of the main pane reserved for the volume histogram. */
 const VOLUME_BAND_TOP = 0.82;
 /**
- * Candle band inside the main pane. The bottom margin must exceed the 0.18
- * histogram band so the lowest candle never touches the volume bars. These
- * margins are honoured only through ``createChart``'s price-scale options;
- * ``chart.priceScale(...)`` and ``series.priceScale()`` both ignore them for
- * an auto-scaled axis (verified by A/B builds).
+ * Candle band inside the main pane. The bottom margin exceeds the 0.18
+ * histogram band so the lowest candle never touches the volume bars, while
+ * the two margins together always leave a positive drawing height.
  */
 const PRICE_SCALE_MARGINS = { top: 0.06, bottom: 0.5 } as const;
+/** Reserve room for a parameter card above each secondary series. */
+const SECONDARY_LEGEND_HEIGHT = 40;
+const SECONDARY_BOTTOM_MARGIN = 0.1;
+const MAX_SECONDARY_TOP_MARGIN = 0.7;
 /** Candle band: a little headroom on top, a clear gap above the volume bars. */
 export const LEFT_EDGE_THRESHOLD_BARS = 200;
 
@@ -101,6 +105,73 @@ function applyVolumeScaleMargins(chart: IChartApi): void {
   });
 }
 
+/** New panes inherit global scales, so override only their own axis explicitly. */
+function applySecondaryPaneScales(chart: IChartApi, model: ChartModel): void {
+  const heights = getSecondaryPaneHeights(model);
+  for (const [index, pane] of model.panes.entries()) {
+    const top = Math.min(
+      MAX_SECONDARY_TOP_MARGIN,
+      Math.max(0.1, SECONDARY_LEGEND_HEIGHT / heights[index]),
+    );
+    chart.priceScale(pane.priceScale, pane.paneIndex).applyOptions({
+      visible: true,
+      scaleMargins: { top, bottom: SECONDARY_BOTTOM_MARGIN },
+    });
+  }
+}
+
+/** Reassert explicit heights after creation and every library resize. */
+function applySecondaryPaneHeights(chart: IChartApi, model: ChartModel): void {
+  const paneApis = chart.panes();
+  for (let index = model.panes.length - 1; index >= 0; index -= 1) {
+    const pane = model.panes[index];
+    paneApis[pane.paneIndex].setHeight(pane.height);
+  }
+}
+
+/** Allocate exact pixel ratios without setHeight redistributing other panes. */
+function applyExactPaneHeights(
+  chart: IChartApi,
+  model: ChartModel,
+  containerHeight: number,
+): ChartPaneLayout[] {
+  const minimumMainHeight = 30;
+  const separatorHeight = model.panes.length;
+  const timeAxisHeight = chart.timeScale().height();
+  const availableHeight = Math.max(
+    containerHeight - timeAxisHeight - separatorHeight,
+    minimumMainHeight,
+  );
+  const secondaryHeights = getSecondaryPaneHeights(model).map((height) =>
+    Math.max(1, Math.round(height)),
+  );
+  const secondaryHeight = secondaryHeights.reduce(
+    (total, height) => total + height,
+    0,
+  );
+  const mainHeight = Math.max(
+    Math.round(availableHeight - secondaryHeight),
+    minimumMainHeight,
+  );
+  const paneApis = chart.panes();
+  paneApis[MAIN_PANE_INDEX].setStretchFactor(mainHeight);
+  let nextTop = mainHeight;
+  const layouts: ChartPaneLayout[] = [];
+  for (const [index, pane] of model.panes.entries()) {
+    const height = secondaryHeights[index];
+    nextTop += 1;
+    layouts.push({
+      key: pane.key,
+      paneIndex: pane.paneIndex,
+      top: nextTop,
+      height,
+    });
+    paneApis[pane.paneIndex].setStretchFactor(height);
+    nextTop += height;
+  }
+  return layouts;
+}
+
 function usesLeftScale(model: ChartModel): boolean {
   return model.series.some((item) => item.priceScale === "left");
 }
@@ -123,8 +194,8 @@ function chartOptions(theme: ChartTheme, hasLeftScale: boolean) {
       textColor: theme.textSecondary,
       panes: {
         enableResize: true,
-        separatorColor: theme.border,
-        separatorHoverColor: theme.grid,
+        separatorColor: theme.paneSeparator,
+        separatorHoverColor: theme.paneSeparatorHover,
       },
     },
     grid: {
@@ -148,8 +219,8 @@ function chartOptions(theme: ChartTheme, hasLeftScale: boolean) {
     },
     rightPriceScale: {
       borderColor: theme.border,
-      scaleMargins: { top: 0.5, bottom: 0.5 },
-      visible: false,
+      scaleMargins: PRICE_SCALE_MARGINS,
+      visible: true,
     },
     leftPriceScale: {
       borderColor: theme.border,
@@ -332,11 +403,9 @@ function buildIndicatorLayers(
   candles: ISeriesApi<"Candlestick", Time>,
   layers: IndicatorLayers,
 ): void {
-  const paneApis = model.panes.map(() => chart.addPane());
-  /** Heights are applied last, deepest first: resizing redistributes stretch. */
-  for (let index = paneApis.length - 1; index >= 0; index -= 1) {
-    paneApis[index].setHeight(model.panes[index].height);
-  }
+  model.panes.forEach(() => chart.addPane());
+  applySecondaryPaneHeights(chart, model);
+  applySecondaryPaneScales(chart, model);
   for (const binding of model.series) {
     const series = chart.addSeries(
       SERIES_DEFINITIONS[binding.type],
@@ -382,6 +451,8 @@ export interface UseFinancialChartOptions {
   model: ChartModel;
   theme: ChartTheme;
   onHover: (hover: ChartHover | null) => void;
+  /** Publishes exact secondary-pane positions for their parameter cards. */
+  onLayout?: (panes: ChartPaneLayout[]) => void;
   /** Create the chart only when there is something to draw. */
   active: boolean;
   /** Fires when fewer than LEFT_EDGE_THRESHOLD_BARS bars remain leftward. */
@@ -392,6 +463,7 @@ export function useFinancialChart({
   model,
   theme,
   onHover,
+  onLayout,
   active,
   onNearLeftEdge,
 }: UseFinancialChartOptions) {
@@ -399,12 +471,23 @@ export function useFinancialChart({
   const instanceRef = useRef<ChartInstance | null>(null);
   const onHoverRef = useRef(onHover);
   onHoverRef.current = onHover;
+  const onLayoutRef = useRef(onLayout);
+  onLayoutRef.current = onLayout;
   const onNearLeftEdgeRef = useRef(onNearLeftEdge);
   onNearLeftEdgeRef.current = onNearLeftEdge;
   const modelRef = useRef(model);
   modelRef.current = model;
   const themeRef = useRef(theme);
   themeRef.current = theme;
+  const syncExactLayout = (
+    chart: IChartApi,
+    currentModel: ChartModel,
+    containerHeight: number,
+  ): void => {
+    onLayoutRef.current?.(
+      applyExactPaneHeights(chart, currentModel, containerHeight),
+    );
+  };
 
   useEffect(() => {
     if (!active) {
@@ -444,6 +527,7 @@ export function useFinancialChart({
     candles.setData(initialModel.candles as never);
     volume.setData(initialModel.volume as never);
     buildIndicatorLayers(chart, initialModel, candles, layers);
+    syncExactLayout(chart, initialModel, container.clientHeight);
     instanceRef.current = { chart, candles, volume, layers };
 
     const handleCrosshair = (param: MouseEventParams<Time>) => {
@@ -484,6 +568,7 @@ export function useFinancialChart({
       const { width, height } = entry.contentRect;
       if (width > 0 && height > 0) {
         chart.applyOptions({ width, height });
+        syncExactLayout(chart, modelRef.current, height);
       }
     });
     observer.observe(container);
@@ -509,6 +594,12 @@ export function useFinancialChart({
     }
     instance.chart.applyOptions(
       chartOptions(theme, usesLeftScale(modelRef.current)),
+    );
+    applySecondaryPaneScales(instance.chart, modelRef.current);
+    syncExactLayout(
+      instance.chart,
+      modelRef.current,
+      containerRef.current?.clientHeight ?? 0,
     );
     instance.candles.applyOptions({
       upColor: theme.up,
@@ -548,6 +639,11 @@ export function useFinancialChart({
         model,
         instance.candles,
         instance.layers,
+      );
+      syncExactLayout(
+        instance.chart,
+        model,
+        containerRef.current?.clientHeight ?? 0,
       );
     }
     if (visibleRange !== null) {

@@ -8,6 +8,8 @@ export interface ChartTheme {
   textSecondary: string;
   grid: string;
   border: string;
+  paneSeparator: string;
+  paneSeparatorHover: string;
   crosshair: string;
   tooltipSurface: string;
   tooltipBorder: string;
@@ -16,12 +18,12 @@ export interface ChartTheme {
 }
 
 /**
- * Validated pair: CVD Delta E 8.3 (protan), normal-vision 31.8, both >= 3:1
- * against the light (#fcfcfb) and dark (#1a1a19) chart surfaces.
+ * TradingView-style red-up/green-down pair: CVD Delta E 11.1, normal-vision
+ * 32.7, both >= 3:1 against the light and dark chart surfaces.
  */
 export const CANDLE_COLORS: Readonly<{ up: string; down: string }> = {
-  up: "#d84949",
-  down: "#008300",
+  up: "#f23645",
+  down: "#089981",
 };
 
 const LIGHT_THEME: ChartTheme = {
@@ -30,6 +32,8 @@ const LIGHT_THEME: ChartTheme = {
   textSecondary: "#52514e",
   grid: "#e8e7e3",
   border: "#d9d8d3",
+  paneSeparator: "#898781",
+  paneSeparatorHover: "#2962ff",
   crosshair: "#8a8880",
   tooltipSurface: "#ffffff",
   tooltipBorder: "#d9d8d3",
@@ -38,14 +42,16 @@ const LIGHT_THEME: ChartTheme = {
 };
 
 const DARK_THEME: ChartTheme = {
-  surface: "#1a1a19",
-  text: "#f0efec",
-  textSecondary: "#c3c2b7",
-  grid: "#2b2b29",
-  border: "#383835",
-  crosshair: "#8f8d84",
-  tooltipSurface: "#232322",
-  tooltipBorder: "#383835",
+  surface: "#131722",
+  text: "#d1d4dc",
+  textSecondary: "#9598a1",
+  grid: "#1e222d",
+  border: "#2a2e39",
+  paneSeparator: "#5f6b7d",
+  paneSeparatorHover: "#2962ff",
+  crosshair: "#758696",
+  tooltipSurface: "#1e222d",
+  tooltipBorder: "#2a2e39",
   up: CANDLE_COLORS.up,
   down: CANDLE_COLORS.down,
 };

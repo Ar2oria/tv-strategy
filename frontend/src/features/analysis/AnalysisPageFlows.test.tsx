@@ -19,10 +19,14 @@ const nearLeftEdge = { trigger: null as null | (() => void) };
 vi.mock("../../charts/FinancialChart", () => ({
   FinancialChart: ({
     computations,
+    toolbar,
+    stateContent,
     onNearLeftEdge,
     renderIndicatorLegend,
   }: {
     computations: Array<{ instance_id: string }>;
+    toolbar?: React.ReactNode;
+    stateContent?: React.ReactNode;
     onNearLeftEdge?: () => void;
     renderIndicatorLegend?: (context: {
       hovered: null;
@@ -33,6 +37,8 @@ vi.mock("../../charts/FinancialChart", () => ({
     nearLeftEdge.trigger = onNearLeftEdge ?? null;
     return (
       <div data-testid="financial-chart">
+        {toolbar}
+        {stateContent}
         {computations.map((item) => (
           <span key={item.instance_id}>{item.instance_id}</span>
         ))}

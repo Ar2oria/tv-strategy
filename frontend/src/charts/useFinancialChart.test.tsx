@@ -18,7 +18,7 @@ type SeriesRecord = {
 const state = {
   chartOptions: [] as unknown[],
   seriesPriceScaleOptions: [] as Array<{ kind: string; options: unknown }>,
-  priceScaleOptions: [] as Array<{ id: string; options: unknown }>,
+  priceScaleOptions: [] as Array<{ id: string; paneIndex: number; options: unknown }>,
   visibleRangeHandlers: [] as Array<(
     range: { from: number; to: number } | null,
   ) => void>,
@@ -28,6 +28,10 @@ const state = {
   markerPlugins: [] as Array<{
     setMarkers: ReturnType<typeof vi.fn>;
     detach: ReturnType<typeof vi.fn>;
+  }>,
+  paneApis: [] as Array<{
+    setHeight: ReturnType<typeof vi.fn>;
+    setStretchFactor: ReturnType<typeof vi.fn>;
   }>,
   applyOptions: vi.fn(),
   removedPriceLines: [] as unknown[],
@@ -89,12 +93,21 @@ vi.mock("lightweight-charts", () => {
         },
       ),
       removeSeries: vi.fn(),
-      addPane: vi.fn(() => ({ setHeight: vi.fn() })),
-      removePane: vi.fn(),
-      panes: vi.fn(() => [{}, {}]),
-      priceScale: vi.fn((id: string) => ({
+      addPane: vi.fn(() => {
+        const pane = { setHeight: vi.fn(), setStretchFactor: vi.fn() };
+        state.paneApis.push(pane);
+        return pane;
+      }),
+      removePane: vi.fn((index: number) => {
+        state.paneApis.splice(index - 1, 1);
+      }),
+      panes: vi.fn(() => [
+        { setHeight: vi.fn(), setStretchFactor: vi.fn() },
+        ...state.paneApis,
+      ]),
+      priceScale: vi.fn((id: string, paneIndex = 0) => ({
         applyOptions: vi.fn((options: unknown) => {
-          state.priceScaleOptions.push({ id, options });
+          state.priceScaleOptions.push({ id, paneIndex, options });
         }),
       })),
       applyOptions: state.applyOptions,
@@ -107,6 +120,7 @@ vi.mock("lightweight-charts", () => {
           },
         ),
         unsubscribeVisibleLogicalRangeChange: vi.fn(),
+        height: vi.fn(() => 28),
         getVisibleRange: vi.fn(() => state.visibleRange),
         setVisibleRange: state.setVisibleRange,
       })),
@@ -129,15 +143,19 @@ const BARS: BarDTO[] = [
   },
 ];
 
-function rsi(pointsValue: number | null): IndicatorComputation {
+function rsi(
+  pointsValue: number | null,
+  instanceId = "r1",
+): IndicatorComputation {
+  const seriesId = `${instanceId}:rsi`;
   return {
-    instance_id: "r1",
+    instance_id: instanceId,
     name: "rsi",
-    panes: [{ id: "r1:rsi", title: "RSI", height: 150, price_scale: "right" }],
+    panes: [{ id: seriesId, title: "RSI", height: 150, price_scale: "right" }],
     series: [
       {
-        id: "r1:rsi",
-        pane_id: "r1:rsi",
+        id: seriesId,
+        pane_id: seriesId,
         type: "line",
         title: "RSI (14)",
         points: [{ time: "2026-01-05", value: pointsValue, color: null }],
@@ -152,12 +170,12 @@ function rsi(pointsValue: number | null): IndicatorComputation {
         color: "#2962ff",
         text: "signal",
         tooltip: null,
-        series_id: "r1:rsi",
+        series_id: seriesId,
       },
     ],
     reference_lines: [
       {
-        series_id: "r1:rsi",
+        series_id: seriesId,
         value: 70,
         color: "#d1345b",
         title: "Overbought 70",
@@ -177,6 +195,7 @@ beforeEach(() => {
   state.setVisibleRange = vi.fn();
   state.series = [];
   state.markerPlugins = [];
+  state.paneApis = [];
   state.applyOptions = vi.fn();
   state.removedPriceLines = [];
   state.resizeCallbacks = [];
@@ -412,28 +431,111 @@ describe("useFinancialChart left-edge paging", () => {
   });
 });
 
+function relativeLuminance(hex: string): number {
+  const channels = [1, 3, 5].map((start) => {
+    const value = Number.parseInt(hex.slice(start, start + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+}
+
+function contrast(left: string, right: string): number {
+  const [high, low] = [relativeLuminance(left), relativeLuminance(right)].sort(
+    (a, b) => b - a,
+  );
+  return (high + 0.05) / (low + 0.05);
+}
+
 describe("useFinancialChart pane layout", () => {
   it("keeps the candle band clear of the volume histogram", () => {
     render(<FinancialChart bars={BARS} computations={[]} />);
 
-    // The candle series' own price scale carries the margins; that is the
-    // only entry point the library honours for an auto-scaled axis.
-    const candleScale = state.seriesPriceScaleOptions.find(
-      (entry) => entry.kind === "candlestick",
-    );
-    expect(candleScale).toBeDefined();
-    const margins = candleScale?.options as {
-      scaleMargins?: { top: number; bottom: number };
+    // Candles use the right scale configured at chart creation. Its margins
+    // must leave a positive drawing band above the volume histogram.
+    const options = state.chartOptions[0] as {
+      rightPriceScale?: { scaleMargins?: { top: number; bottom: number } };
     };
+    const margins = options.rightPriceScale?.scaleMargins;
+    expect(margins).toBeDefined();
     // The histogram occupies the bottom 18%; the candle band must stop above
     // it, so the bottom margin has to be at least that tall.
-    expect(margins.scaleMargins?.bottom).toBeGreaterThanOrEqual(0.18);
-    expect(margins.scaleMargins?.top).toBeGreaterThan(0);
+    expect(margins?.bottom).toBeGreaterThanOrEqual(0.18);
+    expect(margins?.top).toBeGreaterThan(0);
+    expect((margins?.top ?? 1) + (margins?.bottom ?? 1)).toBeLessThan(1);
 
     // The histogram keeps its own reserved band at the pane bottom.
     expect(state.priceScaleOptions).toContainEqual({
       id: "volume",
+      paneIndex: 0,
       options: { scaleMargins: { top: expect.any(Number), bottom: 0 } },
     });
+  });
+
+  it("uses at least 3:1 contrast for pane separators and their hover state", () => {
+    render(<FinancialChart bars={BARS} computations={[rsi(55)]} />);
+
+    const options = state.chartOptions[0] as {
+      layout?: { panes?: { separatorColor: string; separatorHoverColor: string } };
+    };
+    const panes = options.layout?.panes;
+    expect(contrast(panes?.separatorColor ?? "#000000", "#131722")).toBeGreaterThanOrEqual(3);
+    expect(contrast(panes?.separatorHoverColor ?? "#000000", "#131722")).toBeGreaterThanOrEqual(3);
+  });
+
+  it("shows the right price scale for candle prices", () => {
+    render(<FinancialChart bars={BARS} computations={[]} />);
+
+    const options = state.chartOptions[0] as {
+      rightPriceScale?: { visible?: boolean };
+    };
+    expect(options.rightPriceScale?.visible).toBe(true);
+  });
+
+  it("gives secondary panes visible scales with their own margins", () => {
+    render(<FinancialChart bars={BARS} computations={[rsi(55)]} />);
+
+    expect(state.priceScaleOptions).toContainEqual({
+      id: "right",
+      paneIndex: 1,
+      options: {
+        visible: true,
+        scaleMargins: { top: 40 / 150, bottom: 0.1 },
+      },
+    });
+  });
+
+  it("allocates secondary heights with stretch factors after resize", () => {
+    render(<FinancialChart bars={BARS} computations={[rsi(55)]} />);
+    const pane = state.paneApis[0];
+    const observer = state.resizeCallbacks[state.resizeCallbacks.length - 1];
+
+    observer(
+      [{ contentRect: { width: 800, height: 600 } } as ResizeObserverEntry],
+      {} as ResizeObserver,
+    );
+
+    expect(pane.setStretchFactor).toHaveBeenCalledWith(150);
+  });
+
+  it("reallocates heights when a pane is replaced without a container resize", () => {
+    const { rerender } = render(
+      <FinancialChart bars={BARS} computations={[rsi(55, "first")]} />,
+    );
+
+    rerender(<FinancialChart bars={BARS} computations={[rsi(55, "second")]} />);
+
+    const replacement = state.paneApis[state.paneApis.length - 1];
+    expect(replacement.setStretchFactor).toHaveBeenCalledWith(150);
+  });
+
+  it("keeps shrinking secondary panes below 30px without clamping them", () => {
+    const computations = Array.from({ length: 10 }, (_, index) =>
+      rsi(55, `rsi-${index}`),
+    );
+    render(<FinancialChart bars={BARS} computations={computations} />);
+
+    for (const pane of state.paneApis) {
+      expect(pane.setStretchFactor).toHaveBeenCalledWith(25);
+    }
   });
 });

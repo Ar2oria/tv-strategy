@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Literal
 
-from app.config.models import MarketSettings
 from app.domain.dto import Adjustment, BarDTO, InstrumentDTO
+from app.services.bar_sync_service import BarSyncOptions
 
 TODAY = date(2026, 1, 31)
 
@@ -85,12 +85,12 @@ def bar(
     )
 
 
-def market_config(**changes: object) -> MarketSettings:
+def market_config(**changes: object) -> BarSyncOptions:
     values: dict[str, object] = {
         "provider": "yfinance",
         "history_years": 2,
         "overlap_days": 5,
-        "max_retries": 0,
+        "adjustment": "auto",
     }
     values.update(changes)
-    return MarketSettings(**values)  # type: ignore[arg-type]
+    return BarSyncOptions(**values)  # type: ignore[arg-type]

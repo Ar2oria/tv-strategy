@@ -10,6 +10,7 @@ from typing import Callable, NoReturn, TypeAlias
 from pydantic import ValidationError
 
 from app.config.defaults import default_settings
+from app.config.migrations import migrate_legacy_settings_document
 from app.config.models import Settings
 
 SettingsListener: TypeAlias = Callable[[Settings], None]
@@ -115,7 +116,7 @@ class ConfigService:
                 f"Configuration file {self._path} is not valid JSON: {error}"
             ) from error
         try:
-            return Settings.model_validate(decoded)
+            return Settings.model_validate(migrate_legacy_settings_document(decoded))
         except ValidationError as error:
             raise ConfigValidationError(
                 f"Configuration file {self._path} is invalid: {error}"

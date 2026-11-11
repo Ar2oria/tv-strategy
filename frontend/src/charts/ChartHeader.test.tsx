@@ -59,6 +59,25 @@ describe("ChartHeader", () => {
     );
   });
 
+  it("shows close-to-open change and high-to-low amplitude percentages", () => {
+    render(
+      <ChartHeader
+        symbol="0700.HK"
+        timeframe="1d"
+        bar={{ ...bar, open: 10 }}
+        hovering
+        theme={theme}
+      />,
+    );
+
+    expect(screen.getByTestId("chart-header-change")).toHaveTextContent(
+      "+10.00%",
+    );
+    expect(screen.getByTestId("chart-header-amplitude")).toHaveTextContent(
+      "+33.33%",
+    );
+  });
+
   it("marks the fallback bar as the newest when not hovering", () => {
     render(
       <ChartHeader
@@ -91,6 +110,25 @@ describe("ChartHeader", () => {
       color: theme.down,
     });
     expect(screen.getByTestId("chart-header-volume")).toHaveTextContent("—");
+    expect(screen.getByTestId("chart-header-change")).toHaveTextContent("-6.86%");
+    expect(screen.getByTestId("chart-header-change")).toHaveStyle({
+      color: theme.down,
+    });
+  });
+
+  it("shows em dashes when percentage denominators are zero", () => {
+    render(
+      <ChartHeader
+        symbol="0700.HK"
+        timeframe="1d"
+        bar={{ ...bar, open: 0, high: 0, low: 0, close: 0 }}
+        hovering
+        theme={theme}
+      />,
+    );
+
+    expect(screen.getByTestId("chart-header-change")).toHaveTextContent("—");
+    expect(screen.getByTestId("chart-header-amplitude")).toHaveTextContent("—");
   });
 
   it("uses the up color when the bar closed above its open", () => {

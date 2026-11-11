@@ -1,5 +1,6 @@
 import type { BarDTO } from "../types/market";
 import type { IndicatorComputation } from "../types/indicator";
+import { CANDLE_COLORS } from "./theme";
 import {
   CANDLE_SERIES_KEY,
   ChartDataError,
@@ -250,7 +251,7 @@ export function buildChartModel(input: BuildChartModelInput): ChartModel {
 
   return {
     candles,
-    volume: toVolumeData(input.bars, { up: "#d84949", down: "#008300" }),
+    volume: toVolumeData(input.bars, CANDLE_COLORS),
     panes,
     series: series.map(stripPaneKey),
     markers: mergeMarkerGroups(

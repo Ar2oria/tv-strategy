@@ -1,23 +1,22 @@
 import { Alert, Empty, Space, Typography } from "antd";
-import type { ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import type { BarDTO, Timeframe } from "../types/market";
 import type { IndicatorComputation } from "../types/indicator";
 import { buildChartModel } from "./adapter";
+import { getChartHeight } from "./chartLayout";
 import { ChartHeader } from "./ChartHeader";
 import { ChartTooltip } from "./ChartTooltip";
 import { getChartTheme, type ChartMode } from "./theme";
-import { ChartDataError, type ChartHover } from "./types";
+import {
+  ChartDataError,
+  type ChartHover,
+  type ChartModel,
+  type ChartPaneLayout,
+} from "./types";
 import { useFinancialChart } from "./useFinancialChart";
 
-/**
- * The chart shrinks to fit the viewport so the volume pane never falls below
- * the fold once the in-chart toolbar and legends occupy vertical space.
- */
-const CHART_HEIGHT = "clamp(360px, calc(100vh - 320px), 560px)";
-/** Two 18px header lines starting at 8px, plus a small gap. */
-const HEADER_HEIGHT = 52;
 const EMPTY_MODEL = {
   candles: [],
   volume: [],
@@ -34,6 +33,10 @@ const EMPTY_MODEL = {
 export interface FinancialChartProps {
   bars: readonly BarDTO[];
   computations: readonly IndicatorComputation[];
+  /** Controls kept inside the chart panel, including in non-data states. */
+  toolbar?: ReactNode;
+  /** Empty, loading, or error content shown in place of the live canvas. */
+  stateContent?: ReactNode;
   mode?: ChartMode;
   onNearLeftEdge?: () => void;
   /** Symbol shown in the in-chart legend. */
@@ -49,6 +52,8 @@ export interface FinancialChartProps {
     hovered: ChartHover | null;
     latestBar: BarDTO | null;
     activeTime: string | null;
+    /** Undefined is treated as all items by compatibility renderers. */
+    paneId?: string;
   }) => ReactNode;
   /** Reports the bar the legends describe (hovered, else the newest one). */
   onActiveTimeChange?: (time: string | null) => void;
@@ -144,7 +149,9 @@ function useMeasuredBox(): {
 export function FinancialChart({
   bars,
   computations,
-  mode = "light",
+  toolbar,
+  stateContent,
+  mode = "dark",
   onNearLeftEdge,
   symbol = "",
   timeframe = "1d",
@@ -153,68 +160,85 @@ export function FinancialChart({
 }: FinancialChartProps) {
   const theme = getChartTheme(mode);
   const [hover, setHover] = useState<ChartHover | null>(null);
+  const [paneLayouts, setPaneLayouts] = useState<ChartPaneLayout[]>([]);
   const measured = useMeasuredBox();
+  const hasStateContent = stateContent !== undefined && stateContent !== null;
   const { model, failure } = useChartModel(bars, computations);
-  const active = bars.length > 0 && failure === null && model !== null;
+  const active =
+    !hasStateContent && bars.length > 0 && failure === null && model !== null;
   const containerRef = useFinancialChart({
     model: model ?? EMPTY_MODEL,
     theme,
     onHover: setHover,
+    onLayout: setPaneLayouts,
     active,
     onNearLeftEdge,
   });
+  const lastActivePanesRef = useRef<ChartModel["panes"]>([]);
+  useLayoutEffect(() => {
+    if (active && model !== null) {
+      lastActivePanesRef.current = model.panes;
+    }
+  }, [active, model]);
+  const heightModel =
+    active && model !== null
+      ? model
+      : {
+          ...(model ?? EMPTY_MODEL),
+          panes:
+            lastActivePanesRef.current.length > 0
+              ? lastActivePanesRef.current
+              : (model ?? EMPTY_MODEL).panes,
+        };
 
   const latestBar = bars.length === 0 ? null : bars[bars.length - 1];
   const onActiveTimeChangeRef = useRef(onActiveTimeChange);
   onActiveTimeChangeRef.current = onActiveTimeChange;
-  const activeBar = hover !== null ? hover : latestBar;
-  const activeTime = activeBar === null ? null : activeBar.time;
+  const dataIdentity = `${symbol}\u0000${timeframe}`;
+  const previousIdentityRef = useRef(dataIdentity);
+  const identityMatches = previousIdentityRef.current === dataIdentity;
+  useEffect(() => {
+    previousIdentityRef.current = dataIdentity;
+    setHover(null);
+  }, [active, dataIdentity]);
+  const visibleHover = active && identityMatches ? hover : null;
+  const activeBar = visibleHover ?? latestBar;
+  const activeTime = active && activeBar !== null ? activeBar.time : null;
 
   useEffect(() => {
     onActiveTimeChangeRef.current?.(activeTime);
   }, [activeTime]);
-  const legend =
+  const renderLegend = (paneId?: string): ReactNode =>
     renderIndicatorLegend === undefined
       ? null
       : renderIndicatorLegend({
-          hovered: hover,
+          hovered: visibleHover,
           latestBar,
           activeTime,
+          paneId,
         });
 
-  if (failure !== null) {
-    return (
-      <Alert
-        type="error"
-        showIcon
-        title="K 线数据无法绘制"
-        description={failure}
+  const mainLegend = renderLegend("main");
+
+  const inactiveContent = hasStateContent ? (
+    stateContent
+  ) : failure !== null ? (
+    <Alert
+      type="error"
+      showIcon
+      title="K 线数据无法绘制"
+      description={failure}
+    />
+  ) : (
+      <Empty
+        description="当前区间没有可显示的 K 线数据。"
+        style={{ padding: 48 }}
       />
     );
-  }
-
-  if (bars.length === 0 || model === null) {
-    return (
-      <div style={{ position: "relative", width: "100%", height: CHART_HEIGHT }}>
-        {/* Kept mounted so the lifecycle effect can create the chart when bars
-            arrive on a later render, and so an empty range does not tear down
-            a live chart. */}
-        <div
-          ref={containerRef}
-          style={{ position: "absolute", inset: 0, visibility: "hidden" }}
-          aria-hidden="true"
-        />
-        <Empty
-          description="当前区间没有可显示的 K 线数据。"
-          style={{ padding: 48 }}
-        />
-      </div>
-    );
-  }
 
   return (
     <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-      {model.issues.length === 0 ? null : (
+      {!active || model === null || model.issues.length === 0 ? null : (
         <Space orientation="vertical" size="small" style={{ width: "100%" }}>
           {model.issues.map((issue) => (
             <Alert
@@ -227,7 +251,7 @@ export function FinancialChart({
           ))}
         </Space>
       )}
-      {model.warnings.length === 0 ? null : (
+      {!active || model === null || model.warnings.length === 0 ? null : (
         <Space orientation="vertical" size="small" style={{ width: "100%" }}>
           {model.warnings.map((warning) => (
             <Alert
@@ -240,13 +264,11 @@ export function FinancialChart({
         </Space>
       )}
       <div
-        ref={measured.ref}
         style={{
           position: "relative",
           width: "100%",
-          height: CHART_HEIGHT,
           background: theme.surface,
-          borderRadius: 8,
+          borderRadius: 4,
           border: `1px solid ${theme.border}`,
           // Absolute tooltips must never widen the document; they are
           // clamped inside the card instead of creating page scrollbars.
@@ -254,51 +276,115 @@ export function FinancialChart({
         }}
         data-testid="financial-chart"
       >
-        <div
-          ref={containerRef}
-          style={{ width: "100%", height: "100%" }}
-          aria-hidden="true"
-        />
-        <ChartHeader
-          symbol={symbol}
-          timeframe={timeframe}
-          bar={activeBar}
-          hovering={hover !== null}
-          theme={theme}
-        />
-        {legend === null ? null : (
+        {toolbar === undefined ? null : (
           <div
-            style={{
-              position: "absolute",
-              // Below the two-line OHLC header (top 8, 18px lines) so an
-              // indicator row never overlaps the price block.
-              top: HEADER_HEIGHT,
-              left: 12,
-              right: 12,
-              zIndex: 3,
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 8,
-              // Let hover reach the candles behind the legend band.
-              pointerEvents: "none",
-            }}
+            data-testid="financial-chart-toolbar"
+            style={{ borderBottom: `1px solid ${theme.border}` }}
           >
-            {legend}
+            {toolbar}
           </div>
         )}
-        {hover === null ? null : (
-          <ChartTooltip
-            hover={hover}
-            theme={theme}
-            containerWidth={measured.width}
-            containerHeight={measured.height}
-          />
-        )}
+        <div
+          data-testid="financial-chart-canvas"
+          style={{
+            position: "relative",
+            width: "100%",
+            display: "flex",
+            flexDirection: "column",
+            "--chart-height": getChartHeight(computations, heightModel),
+            height: "var(--chart-height)",
+          } as CSSProperties}
+        >
+          {active ? (
+            <div
+              data-testid="financial-chart-info"
+              style={{ flex: "0 0 auto", position: "relative", zIndex: 3 }}
+            >
+              <ChartHeader
+                symbol={symbol}
+                timeframe={timeframe}
+                bar={activeBar}
+                hovering={visibleHover !== null}
+                theme={theme}
+              />
+              {mainLegend === null ? null : (
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 8,
+                    padding: "0 12px 8px",
+                    pointerEvents: "none",
+                  }}
+                >
+                  {mainLegend}
+                </div>
+              )}
+            </div>
+          ) : null}
+          <div
+            ref={measured.ref}
+            data-testid="financial-chart-plot"
+            style={{ position: "relative", flex: "1 1 auto", minHeight: 0 }}
+          >
+            <div
+              ref={containerRef}
+              style={{
+                position: "absolute",
+                inset: 0,
+                visibility: active ? "visible" : "hidden",
+              }}
+              aria-hidden="true"
+            />
+            {active ? (
+              <>
+                {paneLayouts.map((pane) => (
+                  <div
+                    key={pane.key}
+                    data-testid={`indicator-pane-legend-${pane.key}`}
+                    style={{
+                      position: "absolute",
+                      top: pane.top + (pane.height < 8 ? 0 : 2),
+                      transform: `scale(${Math.min(
+                        1,
+                        Math.max(0.1, (pane.height - 4) / 40),
+                      )})`,
+                      transformOrigin: "top left",
+                      left: 12,
+                      right: 12,
+                      zIndex: 3,
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: 8,
+                      pointerEvents: "none",
+                    }}
+                  >
+                    {renderLegend(pane.key)}
+                  </div>
+                ))}
+                {visibleHover === null ? null : (
+                  <ChartTooltip
+                    hover={visibleHover}
+                    theme={theme}
+                    containerWidth={measured.width}
+                    containerHeight={measured.height}
+                  />
+                )}
+              </>
+            ) : (
+              inactiveContent
+            )}
+          </div>
+        </div>
       </div>
-      <ChartSummaryRegion model={model} />
-      <Typography.Text type="secondary" style={{ fontSize: 12 }}>
-        上涨为红色、下跌为绿色；颜色对比度已按 CVD 可读性校验。
-      </Typography.Text>
+      {!active || model === null ? null : (
+        <>
+          <ChartSummaryRegion model={model} />
+          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+            上涨为红色、下跌为绿色；颜色对比度已按 CVD 可读性校验。
+          </Typography.Text>
+        </>
+      )}
     </Space>
   );
 }

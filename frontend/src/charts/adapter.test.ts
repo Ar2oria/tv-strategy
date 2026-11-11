@@ -189,8 +189,11 @@ describe("toCandlestickData", () => {
 describe("toVolumeData", () => {
   it("colors rising and falling bars and skips missing volume", () => {
     expect(
-      toVolumeData(BARS, { up: "#d84949", down: "#008300" }),
-    ).toEqual([{ time: "2026-01-05", value: 100, color: "#d84949" }]);
+      toVolumeData(BARS, { up: "#f23645", down: "#089981" }),
+    ).toEqual([{ time: "2026-01-05", value: 100, color: "#f23645" }]);
+    expect(
+      buildChartModel({ bars: BARS, computations: [] }).volume[0].color,
+    ).toBe("#f23645");
   });
 });
 

@@ -46,15 +46,7 @@ def service(
     *,
     delays: list[float] | None = None,
 ) -> BarSyncService:
-    async def record_delay(delay: float) -> None:
-        if delays is not None:
-            delays.append(delay)
-
-    return BarSyncService(
-        bars,
-        today=lambda: TODAY,
-        sleep=record_delay,
-    )
+    return BarSyncService(bars, today=lambda: TODAY)
 
 
 @pytest.mark.anyio
@@ -265,7 +257,7 @@ async def test_malformed_full_response_preserves_old_bars_without_retry(
 
     with pytest.raises(ProviderDataInvalid):
         await service(bars).sync_instrument(
-            instrument, provider, market_config(max_retries=3), full_refresh=True
+            instrument, provider, market_config(), full_refresh=True
         )
 
     assert len(provider.calls) == 1
@@ -288,7 +280,7 @@ async def test_full_response_with_wrong_source_metadata_preserves_old_bars(
 
     with pytest.raises(ProviderDataInvalid, match="source or adjustment"):
         await service(bars).sync_instrument(
-            instrument, provider, market_config(max_retries=3), full_refresh=True
+            instrument, provider, market_config(), full_refresh=True
         )
 
     assert len(provider.calls) == 1
@@ -296,45 +288,136 @@ async def test_full_response_with_wrong_source_metadata_preserves_old_bars(
 
 
 @pytest.mark.anyio
-async def test_retryable_failures_use_bounded_retries_and_upstream_delay(
+@pytest.mark.parametrize(
+    ("symbol", "market", "instrument_type", "provider_name", "expected"),
+    [
+        ("AAA", "us_stock", "stock", "yfinance", "qfq"),
+        ("^NDX", "us_stock", "index", "yfinance", "none"),
+        ("BINANCE:BTC/USDT", "crypto", "crypto_spot", "binance", "none"),
+    ],
+)
+async def test_auto_adjustment_matches_instrument_kind(
+    session_factory: SessionFactory,
+    bars: BarRepository,
+    symbol: str,
+    market: str,
+    instrument_type: str,
+    provider_name: str,
+    expected: str,
+) -> None:
+    instrument = InstrumentRepository(session_factory).upsert_catalog(
+        instrument_dto(
+            symbol,
+            market=market,  # type: ignore[arg-type]
+            instrument_type=instrument_type,  # type: ignore[arg-type]
+            exchange="binance" if market == "crypto" else "NASDAQ",
+        )
+    )[0]
+    supplied = bar(TODAY, source=provider_name, adjustment=expected)  # type: ignore[arg-type]
+    provider = ScriptedProvider([supplied])
+
+    await service(bars).sync_instrument(
+        instrument,
+        provider,
+        market_config(
+            provider=provider_name,
+            history_years=None if market == "crypto" else 2,
+            adjustment="auto",
+        ),
+    )
+
+    assert len(provider.calls) == 1
+    assert provider.calls[0].adjustment == expected
+    assert bars.get_all_until(instrument.id, TODAY) == [supplied]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("requested", ["qfq", "none"])
+async def test_explicit_adjustment_uses_matching_provider_and_metadata(
+    bars: BarRepository,
+    instrument: InstrumentRecord,
+    requested: str,
+) -> None:
+    supplied = bar(TODAY, adjustment=requested)  # type: ignore[arg-type]
+    provider = ScriptedProvider([supplied])
+
+    await service(bars).sync_instrument(
+        instrument,
+        provider,
+        market_config(adjustment=requested),
+    )
+
+    assert len(provider.calls) == 1
+    assert provider.calls[0].adjustment == requested
+    assert bars.get_all_until(instrument.id, TODAY) == [supplied]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("requested", "returned"),
+    [("qfq", "none"), ("none", "qfq")],
+)
+async def test_explicit_adjustment_mismatch_preserves_existing_bars(
+    bars: BarRepository,
+    instrument: InstrumentRecord,
+    requested: str,
+    returned: str,
+) -> None:
+    original = bar(TODAY - timedelta(days=1), adjustment=requested)  # type: ignore[arg-type]
+    bars.upsert(instrument.id, original)
+    provider = ScriptedProvider(
+        [bar(TODAY, adjustment=returned)]  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(ProviderDataInvalid, match="source or adjustment"):
+        await service(bars).sync_instrument(
+            instrument,
+            provider,
+            market_config(adjustment=requested),
+            full_refresh=True,
+        )
+
+    assert len(provider.calls) == 1
+    assert bars.get_all_until(instrument.id, TODAY) == [original]
+
+
+@pytest.mark.anyio
+async def test_rate_limited_failure_is_not_retried(
     bars: BarRepository,
     instrument: InstrumentRecord,
 ) -> None:
     delays: list[float] = []
     limited = ProviderRateLimited("secret response")
     limited.retry_after = 2.5
-    provider = ScriptedProvider(
-        ProviderUnavailable(),
-        limited,
-        [bar(TODAY)],
-    )
+    provider = ScriptedProvider(limited)
 
-    outcome = await service(bars, delays=delays).sync_instrument(
-        instrument, provider, market_config(max_retries=2)
-    )
+    with pytest.raises(ProviderRateLimited):
+        await service(bars, delays=delays).sync_instrument(
+            instrument, provider, market_config()
+        )
 
-    assert outcome.bar_count == 1
-    assert len(provider.calls) == 3
-    assert delays == [1.0, 2.5]
+    assert len(provider.calls) == 1
+    assert delays == []
+    assert bars.get_all_until(instrument.id, TODAY) == []
 
 
 @pytest.mark.anyio
-async def test_retry_exhaustion_and_provider_failure_never_write_partial_data(
+async def test_provider_failure_is_not_retried_and_preserves_existing_bars(
     bars: BarRepository,
     instrument: InstrumentRecord,
 ) -> None:
     original = bar(TODAY - timedelta(days=1))
     bars.upsert(instrument.id, original)
     delays: list[float] = []
-    provider = ScriptedProvider(ProviderUnavailable(), ProviderUnavailable())
+    provider = ScriptedProvider(ProviderUnavailable())
 
     with pytest.raises(ProviderUnavailable):
         await service(bars, delays=delays).sync_instrument(
-            instrument, provider, market_config(max_retries=1)
+            instrument, provider, market_config()
         )
 
-    assert len(provider.calls) == 2
-    assert delays == [1.0]
+    assert len(provider.calls) == 1
+    assert delays == []
     assert bars.get_all_until(instrument.id, TODAY) == [original]
 
 

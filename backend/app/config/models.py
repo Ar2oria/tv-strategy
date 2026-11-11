@@ -23,7 +23,6 @@ ALLOWED_MARKET_PROVIDERS = {
     "us_stock": frozenset({"yfinance"}),
     "crypto": frozenset({"binance", "okx"}),
 }
-STOCK_MARKETS = frozenset({"a_share", "hk_stock", "us_stock"})
 CRON_FIELD_COUNT = 5
 
 
@@ -47,15 +46,10 @@ class CryptoSymbol(FrozenSettingsModel):
 
 
 class MarketSettings(FrozenSettingsModel):
-    """Provider, history, symbols, and request strategy for one market."""
+    """Provider and request timeout for one market."""
 
     provider: str = Field(min_length=1)
-    history_years: int | None = Field(default=10, ge=1)
-    symbols: list[CryptoSymbol] = Field(default_factory=list)
     request_timeout_seconds: float = Field(default=20, gt=0, le=300)
-    max_retries: int = Field(default=3, ge=0, le=10)
-    concurrency: Literal[1] = 1
-    overlap_days: int = Field(default=45, ge=1, le=366)
 
     @field_validator("provider")
     @classmethod
@@ -128,13 +122,5 @@ class Settings(FrozenSettingsModel):
                 raise ValueError(
                     f"provider {market.provider!r} is not allowed for "
                     f"market {name!r}; expected {sorted(allowed_providers)}"
-                )
-            if name in STOCK_MARKETS and market.history_years is None:
-                raise ValueError(
-                    f"stock market {name!r} must have positive history_years"
-                )
-            if name != "crypto" and market.symbols:
-                raise ValueError(
-                    f"non-crypto market {name!r} must not configure symbols"
                 )
         return self

@@ -1,5 +1,5 @@
 import type { RJSFSchema } from "@rjsf/utils";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -179,5 +179,49 @@ describe("SchemaForm", () => {
     expect(screen.getByLabelText("text")).toBeDisabled();
     await user.click(submit);
     expect(onSubmit).not.toHaveBeenCalled();
+  });
+
+  it("passes left-aligned single-column formContext to RJSF", () => {
+    const { container } = render(
+      <SchemaForm
+        schema={{
+          type: "object",
+          title: "Parameters",
+          properties: {
+            first: { type: "string", default: "one" },
+            second: { type: "string", default: "two" },
+          },
+        }}
+        formContext={{ labelAlign: "left", colSpan: 24 }}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    expect(container.querySelectorAll(".ant-col-12")).toHaveLength(0);
+    expect(container.querySelector(".ant-form-item-label-left")).not.toBeNull();
+  });
+
+  it("submits natively from a horizontal custom action area", () => {
+    const onSubmit = vi.fn<(values: { text: string }) => void>();
+    const { container } = render(
+      <SchemaForm<{ text: string }>
+        schema={{
+          type: "object",
+          properties: { text: { type: "string", default: "abc" } },
+        }}
+        formData={{ text: "abc" }}
+        actions={<button type="button">关闭</button>}
+        onSubmit={onSubmit}
+      />,
+    );
+
+    const actions = container.querySelector(".schema-form-actions");
+    expect(actions).not.toBeNull();
+    const submit = screen.getByRole("button", { name: /submit/i });
+    expect(actions).toContainElement(submit);
+    expect(actions).toContainElement(screen.getByRole("button", { name: "关闭" }));
+    fireEvent.click(submit);
+
+    expect(onSubmit).toHaveBeenCalledWith({ text: "abc" });
   });
 });

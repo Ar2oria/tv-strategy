@@ -1,16 +1,18 @@
 """Resumable built-in daily OHLCV synchronization Tasks."""
 
+import asyncio
 from collections.abc import Iterable
+from dataclasses import dataclass
 from typing import ClassVar, Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
-from app.config.models import MarketSettings
+from app.config.models import CryptoSymbol, MarketSettings
 from app.domain.dto import InstrumentRecord, Market
 from app.providers.crypto_catalog import crypto_instrument
 from app.providers.errors import ProviderError, sanitize_provider_detail
 from app.providers.registry import ProviderRegistry
-from app.services.bar_sync_service import BarSyncService, SyncOutcome
+from app.services.bar_sync_service import BarSyncOptions, BarSyncService, SyncOutcome
 from app.services.resources import RuntimeResources
 from app.tasks.base import (
     Task,
@@ -32,12 +34,25 @@ FAILURE_LOG_MESSAGE = "Instrument synchronization failed"
 SUCCESS_LOG_MESSAGE = "Instrument synchronization succeeded"
 
 
+@dataclass(frozen=True, slots=True)
+class _Attempt:
+    index: int
+    instrument: InstrumentRecord
+    outcome: SyncOutcome | None
+    detail: str | None
+    error_type: str | None
+
+
 class DailySyncParams(TaskParams):
-    """Select current universe members and/or existing canonical symbols."""
+    """Select instruments and control one market's daily synchronization."""
 
     universe_codes: tuple[str, ...] = ()
     symbols: tuple[str, ...] = ()
     full_refresh: bool = False
+    history_years: int | None = Field(default=None, ge=1)
+    overlap_days: int = Field(default=45, ge=1, le=366)
+    concurrency: int = Field(default=1, ge=1, le=8)
+    adjustment: Literal["auto", "qfq", "none"] = "auto"
 
     @field_validator("universe_codes", "symbols")
     @classmethod
@@ -50,6 +65,12 @@ class DailySyncParams(TaskParams):
         return normalized
 
 
+class CryptoDailySyncParams(DailySyncParams):
+    """Daily options plus the default exchange-qualified crypto catalog."""
+
+    spot_pairs: tuple[CryptoSymbol, ...] = ()
+
+
 async def run_daily_sync(
     context: TaskContext,
     params: DailySyncParams,
@@ -58,7 +79,7 @@ async def run_daily_sync(
     """Continue after safe per-symbol failures and report durable progress."""
     resources = _resources(context)
     config = context.settings.markets[market]
-    configured_crypto = _upsert_crypto_catalog(resources, market, config)
+    configured_crypto = _upsert_crypto_catalog(resources, market, params)
     selected, unresolved = _select_instruments(
         resources,
         market,
@@ -73,44 +94,27 @@ async def run_daily_sync(
         _log_unresolved(context, failure)
     initial_failed = len(failures)
     total = len(selected) + initial_failed
+    attempts = await _download_selected(
+        resources,
+        context,
+        config,
+        selected,
+        params,
+        total,
+        initial_failed,
+    )
+
     succeeded = 0
     bar_count = 0
-    current_symbol = selected[-1].symbol if selected else None
-    for current, instrument in enumerate(selected, start=1):
-        current_symbol = instrument.symbol
-        try:
-            outcome = await _sync_one(
-                resources, context.settings.markets[market], instrument, params
-            )
-        except Exception as error:
-            detail = _safe_detail(error)
+    for attempt in attempts:
+        if attempt.outcome is None:
             failures = [
                 *failures,
-                {"symbol": instrument.symbol, "detail": detail},
+                {"symbol": attempt.instrument.symbol, "detail": attempt.detail},
             ]
-            context.log(
-                "ERROR",
-                FAILURE_LOG_MESSAGE,
-                run_id=context.run_id,
-                symbol=instrument.symbol,
-                instrument_id=instrument.id,
-                error_type=type(error).__name__,
-                detail=detail,
-            )
         else:
             succeeded += 1
-            bar_count += outcome.bar_count
-            context.log(
-                "INFO",
-                SUCCESS_LOG_MESSAGE,
-                run_id=context.run_id,
-                symbol=instrument.symbol,
-                instrument_id=instrument.id,
-                bar_count=outcome.bar_count,
-                full_refresh=outcome.full_refresh,
-                detail=sanitize_provider_detail(outcome.detail),
-            )
-        context.report_progress((initial_failed + current) * 100 / total)
+            bar_count += attempt.outcome.bar_count
 
     if not selected:
         context.report_progress(100)
@@ -121,7 +125,7 @@ async def run_daily_sync(
         "succeeded": succeeded,
         "failed": failed,
         "current": total,
-        "current_symbol": current_symbol,
+        "current_symbol": selected[-1].symbol if selected else None,
         "bar_count": bar_count,
         "failures": failures,
     }
@@ -130,6 +134,85 @@ async def run_daily_sync(
         details=details,
         error=_result_error(status, failed, total),
     )
+
+
+async def _download_selected(
+    resources: RuntimeResources,
+    context: TaskContext,
+    config: MarketSettings,
+    selected: tuple[InstrumentRecord, ...],
+    params: DailySyncParams,
+    total: int,
+    initial_failed: int,
+) -> tuple[_Attempt, ...]:
+    semaphore = asyncio.Semaphore(params.concurrency)
+
+    async def bounded(index: int, instrument: InstrumentRecord) -> _Attempt:
+        async with semaphore:
+            return await _attempt(resources, config, instrument, params, index)
+
+    tasks = [
+        asyncio.create_task(bounded(index, instrument))
+        for index, instrument in enumerate(selected)
+    ]
+    attempts: list[_Attempt] = []
+    try:
+        for completed, future in enumerate(asyncio.as_completed(tasks), start=1):
+            attempt = await future
+            attempts.append(attempt)
+            _log_attempt(context, attempt, completed, total, initial_failed)
+        return tuple(sorted(attempts, key=lambda attempt: attempt.index))
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+async def _attempt(
+    resources: RuntimeResources,
+    config: MarketSettings,
+    instrument: InstrumentRecord,
+    params: DailySyncParams,
+    index: int,
+) -> _Attempt:
+    try:
+        outcome = await _sync_one(resources, config, instrument, params)
+    except Exception as error:
+        return _Attempt(index, instrument, None, _safe_detail(error), type(error).__name__)
+    return _Attempt(index, instrument, outcome, None, None)
+
+
+def _log_attempt(
+    context: TaskContext,
+    attempt: _Attempt,
+    completed: int,
+    total: int,
+    initial_failed: int,
+) -> None:
+    instrument = attempt.instrument
+    if attempt.outcome is None:
+        context.log(
+            "ERROR",
+            FAILURE_LOG_MESSAGE,
+            run_id=context.run_id,
+            symbol=instrument.symbol,
+            instrument_id=instrument.id,
+            error_type=attempt.error_type,
+            detail=attempt.detail,
+        )
+    else:
+        context.log(
+            "INFO",
+            SUCCESS_LOG_MESSAGE,
+            run_id=context.run_id,
+            symbol=instrument.symbol,
+            instrument_id=instrument.id,
+            bar_count=attempt.outcome.bar_count,
+            full_refresh=attempt.outcome.full_refresh,
+            detail=sanitize_provider_detail(attempt.outcome.detail),
+        )
+    context.report_progress((initial_failed + completed) * 100 / total)
 
 
 async def _sync_one(
@@ -142,10 +225,11 @@ async def _sync_one(
     sync = _bar_sync(resources)
     record_config = _record_config(config, instrument)
     provider = registry.get_ohlcv(instrument.market, record_config.provider)
+    options = _sync_options(record_config, instrument, params)
     return await sync.sync_instrument(
         instrument,
         provider,
-        record_config,
+        options,
         full_refresh=params.full_refresh,
     )
 
@@ -219,11 +303,12 @@ def _deduplicate(
 def _upsert_crypto_catalog(
     resources: RuntimeResources,
     market: Market,
-    config: MarketSettings,
+    params: DailySyncParams,
 ) -> tuple[InstrumentRecord, ...]:
     if market != "crypto":
         return ()
-    instruments = tuple(crypto_instrument(entry) for entry in config.symbols)
+    crypto_params = require_task_params(params, CryptoDailySyncParams)
+    instruments = tuple(crypto_instrument(entry) for entry in crypto_params.spot_pairs)
     if not instruments:
         return ()
     return tuple(resources.instrument_repository.upsert_catalog(instruments))
@@ -236,6 +321,23 @@ def _record_config(
         return config.model_copy(deep=True)
     provider = instrument.exchange.lower()
     return config.model_copy(deep=True, update={"provider": provider})
+
+
+def _sync_options(
+    config: MarketSettings,
+    instrument: InstrumentRecord,
+    params: DailySyncParams,
+) -> BarSyncOptions:
+    history_years = params.history_years
+    if history_years is None and instrument.market != "crypto":
+        history_years = 10
+    return BarSyncOptions(
+        provider=config.provider,
+        history_years=history_years,
+        overlap_days=params.overlap_days,
+        adjustment=params.adjustment,
+        request_timeout_seconds=config.request_timeout_seconds,
+    )
 
 
 def _resources(context: TaskContext) -> RuntimeResources:
@@ -336,6 +438,7 @@ class CryptoDailySyncTask(MarketDailyTask):
     display_name: ClassVar[str] = "Synchronize crypto daily bars"
     description: ClassVar[str] = "Resume exchange-scoped crypto OHLCV synchronization"
     market: ClassVar[Market] = "crypto"
+    params_model: ClassVar[type[BaseModel]] = CryptoDailySyncParams
 
 
 SyncADailyTask = AShareDailySyncTask

@@ -1,10 +1,18 @@
 import { Alert, Button, Drawer, Input, Space, Switch, Typography } from "antd";
 import { useEffect, useState } from "react";
 
+import { CommaSeparatedWidget } from "../../components/CommaSeparatedWidget";
 import { SchemaForm } from "../../components/SchemaForm";
 import type { JsonObject } from "../../types/api";
 import type { TaskDescriptor } from "../../types/task";
 import { validateCronShape } from "./cron";
+
+const TASK_FORM_CONTEXT = { labelAlign: "left", colSpan: 24 } as const;
+const TASK_UI_SCHEMA = {
+  universe_codes: { "ui:widget": "commaSeparated" },
+  symbols: { "ui:widget": "commaSeparated" },
+} as const;
+const TASK_WIDGETS = { commaSeparated: CommaSeparatedWidget };
 
 export interface TaskConfigDrawerProps {
   task: TaskDescriptor | null;
@@ -70,7 +78,9 @@ export function TaskConfigDrawer({
   return (
     <Drawer
       open
-      width={480}
+      rootClassName="task-config-drawer"
+      size={640}
+      styles={{ wrapper: { maxWidth: "100vw" } }}
       title={`配置 ${task.display_name}`}
       onClose={onClose}
       destroyOnHidden
@@ -117,20 +127,21 @@ export function TaskConfigDrawer({
         </Space>
         <div>
           <Typography.Text strong>任务参数</Typography.Text>
-          <div style={{ marginTop: 8 }}>
+          <div className="task-schema-form" style={{ marginTop: 8 }}>
             <SchemaForm
               key={`${task.name}-${task.revision}`}
               schema={task.params_schema}
               formData={params}
+              formContext={TASK_FORM_CONTEXT}
+              uiSchema={TASK_UI_SCHEMA}
+              widgets={TASK_WIDGETS}
+              actions={<Button onClick={onClose} disabled={saving}>关闭</Button>}
               disabled={saving}
               submitText="保存配置"
               onSubmit={submit}
             />
           </div>
         </div>
-        <Button onClick={onClose} disabled={saving}>
-          关闭
-        </Button>
       </Space>
     </Drawer>
   );

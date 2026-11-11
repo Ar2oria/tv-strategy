@@ -16,17 +16,20 @@ from app.db.database import SessionFactory
 from app.domain.dto import InstrumentDTO, InstrumentRecord, UniverseSnapshot
 from app.providers.akshare_ohlcv import AkshareOhlcvProvider
 from app.providers.baostock_ohlcv import BaoStockOhlcvProvider
+from app.providers.crypto_catalog import crypto_instrument
 from app.providers.errors import ProviderUnavailable
 from app.providers.registry import ProviderRegistry
 from app.repositories.bars import BarRepository
 from app.repositories.instruments import InstrumentRepository
 from app.repositories.task_runs import TaskRunRepository
-from app.services.bar_sync_service import BarSyncService, SyncOutcome
+from app.services.bar_sync_service import BarSyncOptions, BarSyncService, SyncOutcome
 from app.services.resources import RuntimeResources
 from app.tasks.base import TaskContext
 from app.tasks.builtin.sync_daily import (
     AShareDailySyncTask,
+    CryptoDailySyncParams,
     CryptoDailySyncTask,
+    DEFAULT_UNIVERSE_ERROR,
     DailySyncParams,
     HKStockDailySyncTask,
     USStockDailySyncTask,
@@ -44,18 +47,64 @@ TASK_NAMES = {
 }
 
 
+def test_daily_sync_params_default_to_market_independent_options() -> None:
+    params = DailySyncParams()
+
+    assert params.history_years is None
+    assert params.overlap_days == 45
+    assert params.concurrency == 1
+    assert params.adjustment == "auto"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"history_years": 0},
+        {"overlap_days": 0},
+        {"overlap_days": 367},
+        {"concurrency": 0},
+        {"concurrency": 9},
+        {"adjustment": "adjusted"},
+    ],
+)
+def test_daily_sync_params_reject_invalid_values(changes: dict[str, object]) -> None:
+    with pytest.raises(ValueError):
+        DailySyncParams(**changes)  # type: ignore[arg-type]
+
+
+def test_daily_sync_params_allow_null_history_and_explicit_adjustments() -> None:
+    assert DailySyncParams(history_years=None).history_years is None
+    assert DailySyncParams(adjustment="qfq").adjustment == "qfq"
+    assert DailySyncParams(adjustment="none").adjustment == "none"
+
+
 @dataclass(frozen=True, slots=True)
 class ContextHarness:
     context: TaskContext
     runs: TaskRunRepository
 
 
-def settings_with(market: str, config: MarketSettings) -> Settings:
+def settings_with(
+    market: str,
+    config: MarketSettings | BarSyncOptions,
+) -> Settings:
     settings = default_settings()
+    market_settings = (
+        config
+        if isinstance(config, MarketSettings)
+        else MarketSettings(
+            provider=config.provider,
+            request_timeout_seconds=config.request_timeout_seconds,
+        )
+    )
     candidate = settings.model_copy(
-        update={"markets": {**settings.markets, market: config}}
+        update={"markets": {**settings.markets, market: market_settings}}
     )
     return Settings.model_validate(candidate.model_dump(mode="python"))
+
+
+def crypto_settings() -> Settings:
+    return settings_with("crypto", MarketSettings(provider="binance"))
 
 
 def make_context(
@@ -79,13 +128,13 @@ def make_context(
 class RecordingSync:
     def __init__(self, failing: set[str] | None = None) -> None:
         self.failing = failing or set()
-        self.calls: list[tuple[InstrumentRecord, object, MarketSettings, bool]] = []
+        self.calls: list[tuple[InstrumentRecord, object, BarSyncOptions, bool]] = []
 
     async def sync_instrument(
         self,
         instrument: InstrumentRecord,
         provider: object,
-        config: MarketSettings,
+        config: BarSyncOptions,
         full_refresh: bool = False,
     ) -> SyncOutcome:
         self.calls.append((instrument, provider, config, full_refresh))
@@ -301,16 +350,7 @@ class ExchangeProvider:
 async def test_crypto_task_upserts_exchange_qualified_records_and_separates_series(
     session_factory: SessionFactory,
 ) -> None:
-    crypto_config = MarketSettings(
-        provider="binance",
-        history_years=None,
-        max_retries=0,
-        symbols=[
-            CryptoSymbol(exchange="binance", symbol="BTC/USDT"),
-            CryptoSymbol(exchange="okx", symbol="BTC/USDT"),
-        ],
-    )
-    settings = settings_with("crypto", crypto_config)
+    settings = crypto_settings()
     instruments = InstrumentRepository(session_factory)
     bars = BarRepository(session_factory)
     binance = ExchangeProvider("binance")
@@ -327,7 +367,15 @@ async def test_crypto_task_upserts_exchange_qualified_records_and_separates_seri
     )
     harness = make_context(session_factory, resources, settings)
 
-    result = await CryptoDailySyncTask().run(harness.context, DailySyncParams())
+    result = await CryptoDailySyncTask().run(
+        harness.context,
+        CryptoDailySyncParams(
+            spot_pairs=(
+                CryptoSymbol(exchange="binance", symbol="BTC/USDT"),
+                CryptoSymbol(exchange="okx", symbol="BTC/USDT"),
+            )
+        ),
+    )
 
     assert result.status == "success"
     records = instruments.list_instruments(market="crypto")
@@ -336,12 +384,91 @@ async def test_crypto_task_upserts_exchange_qualified_records_and_separates_seri
         "OKX:BTC/USDT",
     ]
     assert records[0].id != records[1].id
+    assert "OKX:IGNORED/USDT" not in [record.symbol for record in records]
     for record in records:
         stored = bars.get_all_until(record.id, TODAY)
         assert len(stored) == 1
         assert stored[0].source == record.exchange
     assert [item.exchange for item in binance.instruments] == ["binance"]
     assert [item.exchange for item in okx.instruments] == ["okx"]
+
+
+@pytest.mark.anyio
+async def test_crypto_empty_task_directory_ignores_market_fallback(
+    session_factory: SessionFactory,
+) -> None:
+    settings = crypto_settings()
+    sync = RecordingSync()
+    resources = RuntimeResources(
+        instrument_repository=InstrumentRepository(session_factory),
+        bar_repository=BarRepository(session_factory),
+        provider_registry=ProviderRegistry(settings=settings),
+        bar_sync_service=sync,  # type: ignore[arg-type]
+    )
+    harness = make_context(session_factory, resources, settings)
+
+    with pytest.raises(ValueError, match=DEFAULT_UNIVERSE_ERROR):
+        await CryptoDailySyncTask().run(harness.context, CryptoDailySyncParams())
+
+    assert sync.calls == []
+
+
+@pytest.mark.anyio
+async def test_crypto_explicit_symbols_use_only_existing_local_catalog(
+    session_factory: SessionFactory,
+) -> None:
+    settings = crypto_settings()
+    instruments = InstrumentRepository(session_factory)
+    instruments.upsert_catalog(
+        crypto_instrument(CryptoSymbol(exchange="okx", symbol="ETH/USDT"))
+    )
+    sync = RecordingSync()
+    resources = RuntimeResources(
+        instrument_repository=instruments,
+        bar_repository=BarRepository(session_factory),
+        provider_registry=ProviderRegistry(
+            settings=settings,
+            ohlcv_providers={"okx": object()},  # type: ignore[dict-item]
+        ),
+        bar_sync_service=sync,  # type: ignore[arg-type]
+    )
+    harness = make_context(session_factory, resources, settings)
+
+    result = await CryptoDailySyncTask().run(
+        harness.context,
+        CryptoDailySyncParams(symbols=("OKX:ETH/USDT",)),
+    )
+
+    assert result.status == "success"
+    assert [call[0].symbol for call in sync.calls] == ["OKX:ETH/USDT"]
+    assert [record.symbol for record in instruments.list_instruments(market="crypto")] == [
+        "OKX:ETH/USDT"
+    ]
+
+
+@pytest.mark.anyio
+async def test_crypto_unknown_explicit_symbol_does_not_import_market_pairs(
+    session_factory: SessionFactory,
+) -> None:
+    settings = crypto_settings()
+    instruments = InstrumentRepository(session_factory)
+    sync = RecordingSync()
+    resources = RuntimeResources(
+        instrument_repository=instruments,
+        bar_repository=BarRepository(session_factory),
+        provider_registry=ProviderRegistry(settings=settings),
+        bar_sync_service=sync,  # type: ignore[arg-type]
+    )
+    harness = make_context(session_factory, resources, settings)
+
+    result = await CryptoDailySyncTask().run(
+        harness.context,
+        CryptoDailySyncParams(symbols=("OKX:MISSING/USDT",)),
+    )
+
+    assert result.status == "failed"
+    assert sync.calls == []
+    assert instruments.list_instruments(market="crypto") == []
 
 
 class StaticUniverseProvider:

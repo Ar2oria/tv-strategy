@@ -33,6 +33,21 @@ function price(value: number): string {
   return value.toFixed(2);
 }
 
+function ratioPercent(numerator: number, denominator: number): string {
+  if (
+    denominator === 0 ||
+    !Number.isFinite(numerator) ||
+    !Number.isFinite(denominator)
+  ) {
+    return "—";
+  }
+  const ratio = numerator / denominator - 1;
+  if (!Number.isFinite(ratio)) {
+    return "—";
+  }
+  return `${ratio >= 0 ? "+" : ""}${(ratio * 100).toFixed(2)}%`;
+}
+
 function volume(value: number | null): string {
   if (value === null) {
     return "—";
@@ -43,7 +58,7 @@ function volume(value: number | null): string {
 }
 
 /**
- * TradingView-style legend pinned to the chart's top-left corner. It shows the
+ * TradingView-style OHLC legend in the chart information band. It shows the
  * hovered bar while the crosshair is inside the chart and falls back to the
  * newest bar so the block never blanks out.
  */
@@ -55,15 +70,12 @@ export function ChartHeader({
   theme,
 }: ChartHeaderProps) {
   const style: CSSProperties = {
-    position: "absolute",
-    top: 8,
-    left: 12,
-    zIndex: 3,
+    position: "relative",
+    padding: "8px 12px 4px",
     pointerEvents: "none",
     fontSize: 12,
     lineHeight: 1.5,
     color: theme.textSecondary,
-    textShadow: `0 0 3px ${theme.surface}`,
   };
 
   if (bar === null) {
@@ -112,6 +124,18 @@ export function ChartHeader({
           收{" "}
           <span style={{ color: directionColor }} data-testid="chart-header-close">
             {price(bar.close)}
+          </span>
+        </span>
+        <span>
+          涨幅{" "}
+          <span style={{ color: directionColor }} data-testid="chart-header-change">
+            {ratioPercent(bar.close, bar.open)}
+          </span>
+        </span>
+        <span>
+          振幅{" "}
+          <span data-testid="chart-header-amplitude">
+            {ratioPercent(bar.high, bar.low)}
           </span>
         </span>
         <span data-testid="chart-header-volume">量 {volume(bar.volume)}</span>

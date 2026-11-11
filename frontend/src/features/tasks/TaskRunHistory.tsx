@@ -69,6 +69,7 @@ export function TaskRunHistory({
         size="small"
         dataSource={[...runs]}
         columns={columns}
+        scroll={{ x: "max-content" }}
         pagination={false}
         rowClassName={(run) => (run.id === selectedRunId ? "ant-table-row-selected" : "")}
         onRow={(run) => ({
@@ -85,7 +86,8 @@ export function TaskRunHistory({
           size="small"
           loading={logsLoading}
           dataSource={[...logs]}
-          pagination={false}
+          scroll={{ x: "max-content" }}
+        pagination={false}
           locale={{ emptyText: <Empty description="选择一条运行记录查看日志" /> }}
           columns={[
             { title: "时间", dataIndex: "created_at", key: "created_at", render: formatTimestamp },

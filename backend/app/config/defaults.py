@@ -2,7 +2,6 @@
 
 from app.config.models import (
     DEFAULT_TIMEZONE,
-    CryptoSymbol,
     IndicatorSettings,
     MarketSettings,
     Settings,
@@ -17,7 +16,6 @@ BUILTIN_MARKET_TASKS = (
     "market.sync_us_daily",
     "market.sync_crypto_daily",
 )
-STOCK_HISTORY_YEARS = 10
 
 
 def default_settings() -> Settings:
@@ -28,29 +26,31 @@ def default_settings() -> Settings:
         markets={
             "a_share": MarketSettings(
                 provider="akshare",
-                history_years=STOCK_HISTORY_YEARS,
             ),
             "hk_stock": MarketSettings(
                 provider="akshare",
-                history_years=STOCK_HISTORY_YEARS,
             ),
             "us_stock": MarketSettings(
                 provider="yfinance",
-                history_years=STOCK_HISTORY_YEARS,
             ),
-            "crypto": MarketSettings(
-                provider="binance",
-                symbols=[
-                    CryptoSymbol(exchange="binance", symbol="BTC/USDT"),
-                    CryptoSymbol(exchange="binance", symbol="ETH/USDT"),
-                ],
-                history_years=None,
-            ),
+            "crypto": MarketSettings(provider="binance"),
         },
         timezone=DEFAULT_TIMEZONE,
         indicators=IndicatorSettings(),
         tasks={
-            name: TaskSettings(enabled=False)
-            for name in (PURGE_TASK_HISTORY, *BUILTIN_MARKET_TASKS)
+            **{
+                name: TaskSettings(enabled=False)
+                for name in (PURGE_TASK_HISTORY, *BUILTIN_MARKET_TASKS)
+                if name != "market.sync_crypto_daily"
+            },
+            "market.sync_crypto_daily": TaskSettings(
+                enabled=False,
+                params={
+                    "spot_pairs": [
+                        {"exchange": "binance", "symbol": "BTC/USDT"},
+                        {"exchange": "binance", "symbol": "ETH/USDT"},
+                    ]
+                },
+            ),
         },
     )

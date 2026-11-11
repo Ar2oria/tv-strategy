@@ -31,11 +31,7 @@ def instrument(session_factory: SessionFactory) -> InstrumentRecord:
 
 
 def sync_service(bars: BarRepository, delays: list[float] | None = None) -> BarSyncService:
-    async def sleep(delay: float) -> None:
-        if delays is not None:
-            delays.append(delay)
-
-    return BarSyncService(bars, today=lambda: TODAY, sleep=sleep)
+    return BarSyncService(bars, today=lambda: TODAY)
 
 
 @pytest.mark.parametrize("boundary", ["pre-start", "future"])
@@ -47,7 +43,7 @@ async def test_full_response_outside_requested_range_preserves_old_bars_without_
 ) -> None:
     original = bar(TODAY - timedelta(days=1))
     bars.upsert(instrument.id, original)
-    config = market_config(max_retries=3)
+    config = market_config()
     requested_start = date(2024, 1, 31)
     invalid = bar(
         requested_start - timedelta(days=1)
@@ -84,7 +80,7 @@ async def test_incremental_response_outside_overlap_range_is_rejected_before_wri
 
     with pytest.raises(ProviderDataInvalid, match="range"):
         await sync_service(bars).sync_instrument(
-            instrument, provider, market_config(max_retries=3)
+            instrument, provider, market_config()
         )
 
     assert len(provider.calls) == 1
@@ -226,20 +222,21 @@ async def test_adjustment_triggered_second_full_fetch_must_also_be_complete(
 
 
 @pytest.mark.anyio
-async def test_retry_after_longer_than_exponential_cap_is_not_clamped(
+async def test_retry_after_guidance_does_not_trigger_a_second_request(
     bars: BarRepository,
     instrument: InstrumentRecord,
 ) -> None:
     delays: list[float] = []
     limited = ProviderRateLimited(retry_after=45.0)
-    provider = ScriptedProvider(limited, [bar(TODAY)])
+    provider = ScriptedProvider(limited)
 
-    outcome = await sync_service(bars, delays).sync_instrument(
-        instrument, provider, market_config(max_retries=1)
-    )
+    with pytest.raises(ProviderRateLimited):
+        await sync_service(bars, delays).sync_instrument(
+            instrument, provider, market_config()
+        )
 
-    assert outcome.bar_count == 1
-    assert delays == [45.0]
+    assert len(provider.calls) == 1
+    assert delays == []
 
 
 @pytest.mark.anyio
@@ -264,7 +261,7 @@ async def test_cooperative_timeout_never_writes_late_worker_result(
         sync_service(bars).sync_instrument(
             instrument,
             BlockingProvider(),  # type: ignore[arg-type]
-            market_config(request_timeout_seconds=0.01, max_retries=0),
+            market_config(request_timeout_seconds=0.01),
             full_refresh=True,
         )
     )

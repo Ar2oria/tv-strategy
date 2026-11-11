@@ -94,6 +94,51 @@ def test_builtin_discovery_is_idempotent_and_contains_history_purge() -> None:
     assert PurgeHistoryTask.params_model.model_config["extra"] == "forbid"
 
 
+@pytest.mark.parametrize(
+    "task_name",
+    [
+        "market.sync_a_daily",
+        "market.sync_hk_daily",
+        "market.sync_us_daily",
+        "market.sync_crypto_daily",
+    ],
+)
+def test_daily_sync_descriptors_expose_sync_parameters(task_name: str) -> None:
+    descriptor = discover_tasks().get(task_name)
+
+    properties = descriptor.params_schema["properties"]
+    assert {
+        "history_years",
+        "overlap_days",
+        "concurrency",
+        "adjustment",
+    } <= properties.keys()
+    assert properties["overlap_days"]["default"] == 45
+    assert properties["concurrency"]["default"] == 1
+    assert properties["adjustment"]["default"] == "auto"
+
+
+def test_only_crypto_daily_descriptor_exposes_structured_spot_pairs() -> None:
+    registry = discover_tasks()
+    crypto_properties = registry.get("market.sync_crypto_daily").params_schema[
+        "properties"
+    ]
+
+    assert crypto_properties["spot_pairs"]["type"] == "array"
+    assert crypto_properties["spot_pairs"]["default"] == []
+    assert crypto_properties["spot_pairs"]["items"]["$ref"] == "#/$defs/CryptoSymbol"
+    crypto_schema = registry.get("market.sync_crypto_daily").params_schema
+    pair_definition = crypto_schema["$defs"]["CryptoSymbol"]
+    assert pair_definition["type"] == "object"
+    assert set(pair_definition["properties"]) == {"exchange", "symbol"}
+    for task_name in (
+        "market.sync_a_daily",
+        "market.sync_hk_daily",
+        "market.sync_us_daily",
+    ):
+        assert "spot_pairs" not in registry.get(task_name).params_schema["properties"]
+
+
 def test_task_result_is_frozen_and_rejects_non_terminal_states() -> None:
     result = TaskResult(status="partial", progress=40, error="one item failed")
 

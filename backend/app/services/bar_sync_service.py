@@ -1,14 +1,14 @@
 """Atomic daily-bar downloads, adjustment detection, and bounded retries."""
 
-import asyncio
 import math
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, timedelta
 from typing import Literal
 
-from app.config.models import MarketSettings
 from app.domain.dto import Adjustment, BarDTO, InstrumentRecord
+
+SyncAdjustment = Literal["auto", "qfq", "none"]
 from app.providers.base import OhlcvProvider
 from app.providers.errors import (
     NoDataAvailable,
@@ -23,11 +23,19 @@ from app.services.provider_calls import call_provider_sync
 
 OHLC_RELATIVE_TOLERANCE = 1e-6
 OHLC_ABSOLUTE_TOLERANCE = 1e-8
-RETRY_BASE_SECONDS = 1.0
-RETRY_MAX_SECONDS = 30.0
 FULL_REPLACEMENT_DETAIL = "Source or OHLC adjustment change required full replacement"
 INCREMENTAL_EMPTY_DETAIL = "No new bars were available"
-RETRYABLE_PROVIDER_ERRORS = (ProviderUnavailable, ProviderRateLimited)
+
+
+@dataclass(frozen=True, slots=True)
+class BarSyncOptions:
+    """Immutable provider and range controls supplied by a daily Task."""
+
+    provider: str
+    history_years: int | None
+    overlap_days: int
+    adjustment: SyncAdjustment
+    request_timeout_seconds: float = 20.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,32 +57,30 @@ class BarSyncService:
         bar_repository: BarRepository,
         *,
         today: Callable[[], date] = date.today,
-        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         cache: IndicatorCache | None = None,
     ) -> None:
-        if not callable(today) or not callable(sleep):
-            raise TypeError("today and sleep must be callable")
+        if not callable(today):
+            raise TypeError("today must be callable")
         self._bars = bar_repository
         self._today = today
-        self._sleep = sleep
         self._cache = cache
 
     async def sync_instrument(
         self,
         instrument: InstrumentRecord,
         provider: OhlcvProvider,
-        config: MarketSettings,
+        config: BarSyncOptions,
         full_refresh: bool = False,
     ) -> SyncOutcome:
         """Fetch completely, then upsert or atomically replace one series."""
         if not isinstance(instrument, InstrumentRecord):
             raise TypeError("instrument must be an InstrumentRecord")
-        if not isinstance(config, MarketSettings):
-            raise TypeError("config must be MarketSettings")
+        if not isinstance(config, BarSyncOptions):
+            raise TypeError("config must be BarSyncOptions")
         if not isinstance(full_refresh, bool):
             raise TypeError("full_refresh must be a boolean")
         end = self._end_date()
-        adjustment = _adjustment_for(instrument)
+        adjustment = _adjustment_for(instrument, config.adjustment)
         existing = tuple(self._bars.get_all_until(instrument.id, end))
         source_changed = _source_or_adjustment_changed(
             existing, config.provider, adjustment
@@ -124,39 +130,30 @@ class BarSyncService:
         start: date | None,
         end: date,
         adjustment: Adjustment,
-        config: MarketSettings,
+        config: BarSyncOptions,
     ) -> tuple[BarDTO, ...]:
-        for attempt in range(config.max_retries + 1):
-            try:
-                rows = await call_provider_sync(
-                    provider.fetch_daily,
-                    instrument,
-                    start,
-                    end,
-                    adjustment,
-                    timeout=config.request_timeout_seconds,
-                )
-                validated = tuple(validate_bars(rows))
-                if any(
-                    (start is not None and row.time < start) or row.time > end
-                    for row in validated
-                ):
-                    raise ProviderDataInvalid(
-                        "Provider bars are outside the requested range"
-                    )
-                if any(
-                    row.source != config.provider or row.adjustment != adjustment
-                    for row in validated
-                ):
-                    raise ProviderDataInvalid(
-                        "Provider bars have unexpected source or adjustment metadata"
-                    )
-                return validated
-            except RETRYABLE_PROVIDER_ERRORS as error:
-                if attempt >= config.max_retries:
-                    raise
-                await self._sleep(_retry_delay(attempt, error))
-        raise AssertionError("retry loop always returns or raises")
+        rows = await call_provider_sync(
+            provider.fetch_daily,
+            instrument,
+            start,
+            end,
+            adjustment,
+            timeout=config.request_timeout_seconds,
+        )
+        validated = tuple(validate_bars(rows))
+        if any(
+            (start is not None and row.time < start) or row.time > end
+            for row in validated
+        ):
+            raise ProviderDataInvalid("Provider bars are outside the requested range")
+        if any(
+            row.source != config.provider or row.adjustment != adjustment
+            for row in validated
+        ):
+            raise ProviderDataInvalid(
+                "Provider bars have unexpected source or adjustment metadata"
+            )
+        return validated
 
     def _replace(
         self,
@@ -192,7 +189,12 @@ def _empty_outcome(instrument_id: int, requires_full: bool) -> SyncOutcome:
     )
 
 
-def _adjustment_for(instrument: InstrumentRecord) -> Adjustment:
+def _adjustment_for(
+    instrument: InstrumentRecord,
+    requested: SyncAdjustment,
+) -> Adjustment:
+    if requested != "auto":
+        return requested
     if instrument.instrument_type in {"index", "crypto_spot"}:
         return "none"
     return "qfq"
@@ -269,16 +271,3 @@ def _overlap_requires_replacement(
         ):
             return True
     return False
-
-
-def _retry_delay(attempt: int, error: Exception) -> float:
-    exponential = min(RETRY_BASE_SECONDS * (2**attempt), RETRY_MAX_SECONDS)
-    upstream = getattr(error, "retry_after", None)
-    if (
-        isinstance(upstream, (int, float))
-        and not isinstance(upstream, bool)
-        and math.isfinite(upstream)
-        and upstream >= 0
-    ):
-        exponential = max(exponential, float(upstream))
-    return exponential

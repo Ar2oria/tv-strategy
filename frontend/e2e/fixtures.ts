@@ -1,4 +1,5 @@
 import type { Page, Route } from "@playwright/test";
+import type { TaskDescriptor } from "../src/types/task";
 
 /** Deterministic API fixtures so E2E never touches a real provider. */
 
@@ -287,7 +288,7 @@ export interface ApiState {
   emptyDatabase: boolean;
   rsiFails: boolean;
   settings: typeof SETTINGS;
-  task: typeof TASK;
+  task: TaskDescriptor;
   revisionConflict: boolean;
 }
 
@@ -296,7 +297,7 @@ export function createState(): ApiState {
     emptyDatabase: false,
     rsiFails: false,
     settings: structuredClone(SETTINGS),
-    task: structuredClone(TASK),
+    task: structuredClone(TASK) as unknown as TaskDescriptor,
     revisionConflict: false,
   };
 }

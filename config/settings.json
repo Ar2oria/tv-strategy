@@ -1,51 +1,22 @@
 {
   "schema_version": 1,
-  "revision": 4,
+  "revision": 7,
   "markets": {
     "a_share": {
-      "provider": "akshare",
-      "history_years": 10,
-      "symbols": [],
-      "request_timeout_seconds": 20.0,
-      "max_retries": 3,
-      "concurrency": 1,
-      "overlap_days": 45
+      "provider": "baostock",
+      "request_timeout_seconds": 20.0
     },
     "hk_stock": {
-      "provider": "akshare",
-      "history_years": 10,
-      "symbols": [],
-      "request_timeout_seconds": 20.0,
-      "max_retries": 3,
-      "concurrency": 1,
-      "overlap_days": 45
+      "provider": "yfinance",
+      "request_timeout_seconds": 20.0
     },
     "us_stock": {
       "provider": "yfinance",
-      "history_years": 10,
-      "symbols": [],
-      "request_timeout_seconds": 20.0,
-      "max_retries": 3,
-      "concurrency": 1,
-      "overlap_days": 45
+      "request_timeout_seconds": 20.0
     },
     "crypto": {
       "provider": "binance",
-      "history_years": null,
-      "symbols": [
-        {
-          "exchange": "binance",
-          "symbol": "BTC/USDT"
-        },
-        {
-          "exchange": "binance",
-          "symbol": "ETH/USDT"
-        }
-      ],
-      "request_timeout_seconds": 20.0,
-      "max_retries": 3,
-      "concurrency": 1,
-      "overlap_days": 45
+      "request_timeout_seconds": 20.0
     }
   },
   "timezone": "UTC",
@@ -66,22 +37,48 @@
     "market.sync_a_daily": {
       "enabled": false,
       "cron": "0 0 * * *",
-      "params": {}
+      "params": {
+        "history_years": 10,
+        "overlap_days": 45,
+        "concurrency": 1
+      }
     },
     "market.sync_hk_daily": {
       "enabled": false,
       "cron": "0 0 * * *",
-      "params": {}
+      "params": {
+        "history_years": 10,
+        "overlap_days": 45,
+        "concurrency": 1
+      }
     },
     "market.sync_us_daily": {
       "enabled": false,
       "cron": "0 0 * * *",
-      "params": {}
+      "params": {
+        "history_years": 10,
+        "overlap_days": 45,
+        "concurrency": 1
+      }
     },
     "market.sync_crypto_daily": {
       "enabled": false,
       "cron": "0 0 * * *",
-      "params": {}
+      "params": {
+        "history_years": null,
+        "overlap_days": 45,
+        "concurrency": 1,
+        "spot_pairs": [
+          {
+            "exchange": "binance",
+            "symbol": "BTC/USDT"
+          },
+          {
+            "exchange": "binance",
+            "symbol": "ETH/USDT"
+          }
+        ]
+      }
     }
   }
 }

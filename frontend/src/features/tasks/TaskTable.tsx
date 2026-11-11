@@ -137,6 +137,7 @@ export function TaskTable({
       loading={loading}
       dataSource={[...tasks]}
       columns={columns}
+      scroll={{ x: "max-content" }}
       pagination={false}
       rowClassName={(task) =>
         task.name === selectedTaskName ? "ant-table-row-selected" : ""

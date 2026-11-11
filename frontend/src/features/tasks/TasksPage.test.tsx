@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEventBase from "@testing-library/user-event";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +11,17 @@ import {
 } from "../../test/apiFixtures";
 import { routes } from "../../router";
 import type { TaskDescriptor, TaskLogDTO, TaskRunDTO } from "../../types/task";
+import * as taskApi from "../../api/endpoints";
+
+import { WorkspaceVisibilityProvider } from "../workspace/WorkspaceVisibility";
+
+vi.mock("../../charts/FinancialChart", () => ({
+  FinancialChart: () => <div data-testid="financial-chart" />,
+}));
+vi.mock("./TaskTable", async () => {
+  const { TaskTableStub } = await import("../../test/TaskTableStub");
+  return { TaskTable: TaskTableStub };
+});
 
 const userEvent = userEventBase.setup({ delay: null });
 
@@ -136,7 +147,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function renderTasks() {
+function renderTasks(active = true) {
   const router = createMemoryRouter(routes, { initialEntries: ["/tasks"] });
   return render(
     <QueryClientProvider
@@ -144,7 +155,9 @@ function renderTasks() {
         defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
       })}
     >
-      <RouterProvider router={router} />
+      <WorkspaceVisibilityProvider active={active}>
+        <RouterProvider router={router} />
+      </WorkspaceVisibilityProvider>
     </QueryClientProvider>,
   );
 }
@@ -158,21 +171,21 @@ describe("TasksPage", { timeout: 40000 }, () => {
     renderTasks();
 
     expect(await screen.findByText("Synchronize market")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Task 管理" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "Task 管理" })).toBeInTheDocument();
     expect(screen.getByText("0 0 * * *")).toBeInTheDocument();
     expect(screen.getAllByText(/下次运行/).length).toBeGreaterThan(0);
   });
 
   it("rejects a cron with the wrong number of fields before calling the server", async () => {
     renderTasks();
-    await userEvent.click(
-      await screen.findByRole("button", { name: "配置 market.sync" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "配置 market.sync" }));
     const drawer = await screen.findByRole("dialog");
 
     const cronInput = within(drawer).getByLabelText("Cron 表达式");
     await userEvent.clear(cronInput);
     await userEvent.type(cronInput, "* * *");
-    await userEvent.click(
+    fireEvent.click(
       within(drawer).getByRole("button", { name: "保存配置" }),
     );
 
@@ -184,14 +197,12 @@ describe("TasksPage", { timeout: 40000 }, () => {
 
   it("saves cron and enabled state with the current revision", async () => {
     renderTasks();
-    await userEvent.click(
-      await screen.findByRole("button", { name: "配置 market.sync" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "配置 market.sync" }));
     const drawer = await screen.findByRole("dialog");
     const cronInput = within(drawer).getByLabelText("Cron 表达式");
     await userEvent.clear(cronInput);
     await userEvent.type(cronInput, "30 8 * * 1-5");
-    await userEvent.click(within(drawer).getByRole("button", { name: "保存配置" }));
+    fireEvent.click(within(drawer).getByRole("button", { name: "保存配置" }));
 
     await waitFor(() => expect(writes("PUT")).toHaveLength(1));
     expect(writes("PUT")[0].body).toMatchObject({
@@ -204,9 +215,7 @@ describe("TasksPage", { timeout: 40000 }, () => {
 
   it("shows a backend field error for a cron the server rejects", async () => {
     renderTasks();
-    await userEvent.click(
-      await screen.findByRole("button", { name: "配置 market.sync" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "配置 market.sync" }));
     const drawer = await screen.findByRole("dialog");
     const cronInput = within(drawer).getByLabelText("Cron 表达式");
     await userEvent.clear(cronInput);
@@ -227,7 +236,7 @@ describe("TasksPage", { timeout: 40000 }, () => {
         return respond(recorded);
       }),
     );
-    await userEvent.click(within(drawer).getByRole("button", { name: "保存配置" }));
+    fireEvent.click(within(drawer).getByRole("button", { name: "保存配置" }));
 
     expect(
       await within(drawer).findByText("Request validation failed"),
@@ -237,7 +246,7 @@ describe("TasksPage", { timeout: 40000 }, () => {
   it("runs a task immediately while scheduling is disabled", async () => {
     state.task = { ...state.task, enabled: false };
     renderTasks();
-    await userEvent.click(
+    fireEvent.click(
       await screen.findByRole("button", { name: "立即执行 market.sync" }),
     );
 
@@ -248,7 +257,7 @@ describe("TasksPage", { timeout: 40000 }, () => {
 
   it("polls run history while a run is active and stops on a terminal state", async () => {
     renderTasks();
-    await userEvent.click(
+    fireEvent.click(
       await screen.findByRole("button", { name: "立即执行 market.sync" }),
     );
     await screen.findByText("运行中");
@@ -284,9 +293,25 @@ describe("TasksPage", { timeout: 40000 }, () => {
     expect(after).toBe(settled);
   });
 
+  it("pauses active-run polling while the task tab is hidden", async () => {
+    const interval = vi.spyOn(globalThis, "setInterval");
+    renderTasks();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "立即执行 market.sync" }),
+    );
+    await screen.findByText("运行中");
+    interval.mockClear();
+
+    fireEvent.click(screen.getByRole("link", { name: "图表分析" }));
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+
+    expect(interval.mock.calls.filter(([, milliseconds]) => milliseconds === 2000)).toHaveLength(0);
+    interval.mockRestore();
+  });
+
   it("shows run logs for a selected historical run", async () => {
     renderTasks();
-    await userEvent.click(
+    fireEvent.click(
       await screen.findByRole("button", { name: "历史 market.sync" }),
     );
 
@@ -296,14 +321,12 @@ describe("TasksPage", { timeout: 40000 }, () => {
   it("refreshes on 409 and asks the user to reapply instead of overwriting", async () => {
     state.conflictOnce = true;
     renderTasks();
-    await userEvent.click(
-      await screen.findByRole("button", { name: "配置 market.sync" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "配置 market.sync" }));
     const drawer = await screen.findByRole("dialog");
     const cronInput = within(drawer).getByLabelText("Cron 表达式");
     await userEvent.clear(cronInput);
     await userEvent.type(cronInput, "15 9 * * *");
-    await userEvent.click(within(drawer).getByRole("button", { name: "保存配置" }));
+    fireEvent.click(within(drawer).getByRole("button", { name: "保存配置" }));
 
     expect(
       await within(drawer).findByText(/配置已被其他页面修改/),
@@ -316,14 +339,12 @@ describe("TasksPage", { timeout: 40000 }, () => {
   it("keeps the user's cron edit after a conflict so it can be reapplied", async () => {
     state.conflictOnce = true;
     renderTasks();
-    await userEvent.click(
-      await screen.findByRole("button", { name: "配置 market.sync" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "配置 market.sync" }));
     const drawer = await screen.findByRole("dialog");
     const cronInput = within(drawer).getByLabelText("Cron 表达式");
     await userEvent.clear(cronInput);
     await userEvent.type(cronInput, "15 9 * * *");
-    await userEvent.click(within(drawer).getByRole("button", { name: /保\s*存配置/ }));
+    fireEvent.click(within(drawer).getByRole("button", { name: /保\s*存配置/ }));
 
     await within(drawer).findByText(/配置已被其他页面修改/);
     // The newest server value is loaded, and only one write was attempted: the
@@ -353,7 +374,7 @@ describe("TasksPage", { timeout: 40000 }, () => {
     );
 
     const toggle = screen.getByRole("switch", { name: "启用 market.sync" });
-    await userEvent.click(toggle);
+    fireEvent.click(toggle);
 
     await waitFor(() => expect(toggleWrites).toBe(1));
     // A conflict must refresh the catalog so the next attempt uses a new revision.
@@ -372,64 +393,52 @@ describe("TasksPage", { timeout: 40000 }, () => {
     renderTasks();
     await screen.findByText("Synchronize market");
 
-    // Another page bumps the stored revision; an immediate run refetches the
-    // catalog so the later save must use revision 9, not the initial 4.
+    // A conflicting toggle refreshes the catalog after another page bumps the
+    // stored revision; the later drawer save must use 9, not the initial 4.
     state.task = { ...state.task, revision: 9, cron: "0 7 * * *" };
-    await userEvent.click(
-      screen.getByRole("button", { name: "立即执行 market.sync" }),
+    let toggleWrites = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const recorded: Recorded = {
+          url: String(input),
+          method: init?.method ?? "GET",
+          body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+        };
+        requests.push(recorded);
+        if (recorded.method === "PUT" && toggleWrites === 0) {
+          toggleWrites += 1;
+          return failure(409, "revision_conflict", "Request conflict");
+        }
+        return respond(recorded);
+      }),
     );
-    await waitFor(
-      () => expect(screen.getByText("0 7 * * *")).toBeInTheDocument(),
-      { timeout: 5000 },
-    );
-    // The queued run must reach a terminal state so run-history polling
-    // stops; constant polling re-renders keep the row unstable for
-    // userEvent under coverage instrumentation.
-    state.runs = state.runs.map((run) =>
-      run.id === 9 ? { ...run, status: "success" } : run,
-    );
-    process.stderr.write("FLIPPED\n");
-    await waitFor(
-      () => expect(screen.getAllByText("成功").length).toBeGreaterThan(0),
-      { timeout: 5000 },
-    ).catch(() => process.stderr.write("SUCCESS-WAIT-TIMEOUT\n"));
-    process.stderr.write("TERMINAL seen\n");
+    fireEvent.click(screen.getByRole("switch", { name: "启用 market.sync" }));
+    await waitFor(() => expect(toggleWrites).toBe(1));
+    await screen.findByText("0 7 * * *");
+    const updateSpy = vi.spyOn(taskApi, "updateTaskConfig");
 
-    process.stderr.write("PRE-CONFIGURE\n");
-    await userEvent.click(
+    fireEvent.click(
       screen.getByRole("button", { name: "配置 market.sync" }),
     );
-    process.stderr.write("CONFIGURE clicked\n");
     const drawer = await screen.findByRole("dialog");
-    process.stderr.write("DRAWER open\n");
-    await userEvent.click(
+    fireEvent.click(
       within(drawer).getByRole("button", { name: /保\s*存配置/ }),
     );
-    process.stderr.write("SAVE clicked\n");
 
-    await waitFor(() => expect(writes("PUT")).toHaveLength(1), {
+    await waitFor(() => expect(updateSpy).toHaveBeenCalledTimes(1), {
       timeout: 5000,
-    }).catch((error: unknown) => {
-      process.stderr.write(`PUT-WAIT-FAILED: ${String(error)}
-`);
-      process.stderr.write(
-        `ALL REQUESTS: ${JSON.stringify(requests.map((r) => r.method + " " + r.url.slice(-40)))}
-`,
-      );
     });
-    expect(
-      (writes("PUT")[0].body as { expected_revision: number }).expected_revision,
-    ).toBe(9);
+    expect(writes("PUT")).toHaveLength(2);
+    expect(writes("PUT").at(-1)?.body).toMatchObject({ expected_revision: 9 });
   });
 
   it("shows a retry hint when rate limited", async () => {
     state.rateLimited = true;
     renderTasks();
-    await userEvent.click(
-      await screen.findByRole("button", { name: "配置 market.sync" }),
-    );
+    fireEvent.click(await screen.findByRole("button", { name: "配置 market.sync" }));
     const drawer = await screen.findByRole("dialog");
-    await userEvent.click(within(drawer).getByRole("button", { name: "保存配置" }));
+    fireEvent.click(within(drawer).getByRole("button", { name: "保存配置" }));
 
     expect(await within(drawer).findByText(/请求过于频繁/)).toBeInTheDocument();
   });

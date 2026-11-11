@@ -56,7 +56,10 @@ export function useIndicatorComputation({
   );
 
   const enabled =
-    instrumentId !== null && requestInstances.length > 0 && !pending;
+    instrumentId !== null &&
+    start !== null &&
+    requestInstances.length > 0 &&
+    !pending;
 
   const activeIds = useMemo(
     () => new Set(instances.map((item) => item.instanceId)),

@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Alert, Card, Space, Typography } from "antd";
+import { Alert, Card, Space } from "antd";
 import { useEffect, useMemo, useState } from "react";
 
 import { ApiError } from "../../api/errors";
@@ -16,6 +16,7 @@ import { TaskConfigDrawer } from "./TaskConfigDrawer";
 import { TaskRunHistory } from "./TaskRunHistory";
 import { TaskTable } from "./TaskTable";
 import { hasActiveRun, latestRun } from "./taskRuns";
+import { useWorkspaceVisibility } from "../workspace/WorkspaceVisibility";
 
 const RUN_POLL_INTERVAL_MS = 2000;
 const HISTORY_LIMIT = 20;
@@ -67,6 +68,7 @@ export function TasksPage() {
 
   const runs = useMemo(() => runsQuery.data ?? [], [runsQuery.data]);
   const active = hasActiveRun(runs);
+  const workspaceActive = useWorkspaceVisibility();
 
   const logsQuery = useQuery({
     queryKey: ["task-logs", selectedRunId],
@@ -159,7 +161,7 @@ export function TasksPage() {
   });
 
   useEffect(() => {
-    if (!active || activeTaskName === null) {
+    if (!active || activeTaskName === null || !workspaceActive) {
       return;
     }
     const timer = setInterval(() => {
@@ -168,7 +170,7 @@ export function TasksPage() {
       });
     }, RUN_POLL_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [active, activeTaskName, queryClient]);
+  }, [active, activeTaskName, queryClient, workspaceActive]);
 
   const tasks = useMemo(() => tasksQuery.data ?? [], [tasksQuery.data]);
   const newestRun = latestRun(runs);
@@ -181,9 +183,6 @@ export function TasksPage() {
 
   return (
     <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-      <Typography.Title level={4} style={{ margin: 0 }}>
-        Task 管理
-      </Typography.Title>
       {runError === null ? null : (
         <Alert type="error" showIcon title={runError} closable onClose={() => setRunError(null)} />
       )}

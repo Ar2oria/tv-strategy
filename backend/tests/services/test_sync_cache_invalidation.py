@@ -40,7 +40,6 @@ async def test_successful_sync_invalidates_cached_entries(
         BarRepository(session_factory),
         cache=cache,
         today=lambda: TODAY,
-        sleep=lambda delay: None,
     )
 
     outcome = await service.sync_instrument(
@@ -67,7 +66,6 @@ async def test_empty_sync_keeps_cached_entries(
         BarRepository(session_factory),
         cache=cache,
         today=lambda: TODAY,
-        sleep=lambda delay: None,
     )
 
     from app.providers.errors import NoDataAvailable

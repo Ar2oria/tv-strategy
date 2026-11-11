@@ -1,6 +1,41 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 import { createState, installApiRoutes } from "./fixtures";
+
+async function centerY(control: Locator): Promise<number> {
+  const box = await control.boundingBox();
+  if (box === null) {
+    throw new Error("control box missing");
+  }
+  return box.y + box.height / 2;
+}
+
+async function panelHeight(chart: Locator): Promise<number> {
+  const box = await chart.boundingBox();
+  if (box === null) {
+    throw new Error("chart box missing");
+  }
+  return box.height;
+}
+
+async function secondaryCanvasHeights(page: Page): Promise<number[]> {
+  const heights = await page.locator("canvas").evaluateAll((canvases) =>
+    canvases.map((canvas) => canvas.getBoundingClientRect().height),
+  );
+  return [...new Set(
+    heights
+      .filter((height) => height > 0 && height <= 160 && height !== 28)
+      .map((height) => Math.round(height * 100) / 100),
+  )].sort((left, right) => left - right);
+}
+
+async function addIndicator(page: Page, label: string): Promise<void> {
+  await page.getByRole("button", { name: "添加指标" }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByText(label).click();
+  await dialog.getByRole("button", { name: /添\s*加/ }).click();
+  await expect(dialog).toHaveCount(0);
+}
 
 test.describe("chart analysis journey", () => {
   test("selects a stock, adds a main signal and an RSI pane, and edits parameters", async ({
@@ -135,14 +170,23 @@ test.describe("tradingview-style chrome", () => {
 
     await page.getByRole("combobox", { name: "股票搜索" }).fill("AAA");
     await page.getByText("AAA · Alpha Corp").click();
-    await expect(page.getByTestId("financial-chart")).toBeVisible();
+    const chart = page.getByTestId("financial-chart");
+    await expect(chart).toBeVisible();
 
-    // The toolbar above the chart holds symbol, timeframe and add-indicator.
-    await expect(page.getByRole("combobox", { name: "股票搜索" })).toBeVisible();
-    await expect(
-      page.getByRole("radiogroup", { name: "周期" }),
-    ).toBeVisible();
-    await expect(page.getByRole("button", { name: "添加指标" })).toBeVisible();
+    // All three selectors are descendants of the chart panel, not a sibling card.
+    const searchControl = chart.getByRole("combobox", { name: "股票搜索" });
+    const timeframeControl = chart.getByRole("radiogroup", { name: "周期" });
+    const addControl = chart.getByRole("button", { name: "添加指标" });
+    await expect(searchControl).toBeVisible();
+    await expect(timeframeControl).toBeVisible();
+    await expect(addControl).toBeVisible();
+    const centers = await Promise.all([
+      centerY(searchControl),
+      centerY(timeframeControl),
+      centerY(addControl),
+    ]);
+    expect(Math.abs(centers[0] - centers[1])).toBeLessThanOrEqual(2);
+    expect(Math.abs(centers[0] - centers[2])).toBeLessThanOrEqual(2);
 
     // The in-chart legend idles on the newest bar and marks it as such.
     const header = page.getByTestId("chart-header");
@@ -152,7 +196,6 @@ test.describe("tradingview-style chrome", () => {
     await expect(page.getByTestId("chart-header-date")).toContainText("最新");
 
     // Hovering the candles retargets the legend to the hovered bar.
-    const chart = page.getByTestId("financial-chart");
     const box = await chart.boundingBox();
     if (box === null) {
       throw new Error("chart box missing");
@@ -181,6 +224,155 @@ test.describe("tradingview-style chrome", () => {
     );
     await expect(page.getByTestId("chart-header-open")).toBeVisible();
     await expect(page.getByTestId("chart-header-close")).toBeVisible();
+  });
+
+  test("grows only by secondary pane heights, then shrinks on hide and remove", async ({
+    page,
+  }) => {
+    const state = createState();
+    await installApiRoutes(page, state);
+    await page.goto("/analysis");
+    await page.getByRole("combobox", { name: "股票搜索" }).fill("AAA");
+    await page.getByText("AAA · Alpha Corp").click();
+
+    const chart = page.getByTestId("financial-chart");
+    await expect(chart).toBeVisible();
+    const plot = page.getByTestId("financial-chart-plot");
+    const initialPlotBox = await plot.boundingBox();
+    if (initialPlotBox === null) {
+      throw new Error("plot box missing");
+    }
+    const baseHeight = await panelHeight(chart);
+
+    await addIndicator(page, "Donchian Breakout");
+    await expect(page.getByText("Donchian Breakout (window=2)")).toBeVisible();
+    await expect.poll(() => panelHeight(chart)).toBe(baseHeight);
+    await expect
+      .poll(async () => (await plot.boundingBox())?.y ?? 0)
+      .toBeGreaterThan(initialPlotBox.y);
+    const infoBox = await page.getByTestId("financial-chart-info").boundingBox();
+    const shiftedPlotBox = await plot.boundingBox();
+    if (infoBox === null || shiftedPlotBox === null) {
+      throw new Error("chart layout box missing");
+    }
+    expect(infoBox.y + infoBox.height).toBeLessThanOrEqual(shiftedPlotBox.y);
+    const mainHeight = await panelHeight(chart);
+
+    await addIndicator(page, "Relative Strength Index");
+    await expect(page.getByText("Relative Strength Index (window=2)")).toBeVisible();
+    await expect.poll(() => panelHeight(chart)).toBe(mainHeight + 160);
+    const oneRsiHeight = await panelHeight(chart);
+
+    await addIndicator(page, "Relative Strength Index");
+    await expect(page.getByTestId(/^indicator-legend-/)).toHaveCount(3);
+    await expect.poll(() => panelHeight(chart)).toBe(oneRsiHeight + 160);
+    const twoRsiHeight = await panelHeight(chart);
+
+    const firstRsiRow = page
+      .getByTestId(/^indicator-legend-/)
+      .filter({ hasText: "Relative Strength Index" })
+      .first();
+    await firstRsiRow.getByRole("button", { name: /隐藏/ }).click();
+    await expect.poll(() => panelHeight(chart)).toBe(twoRsiHeight - 160);
+    await firstRsiRow.getByRole("button", { name: /显示/ }).click();
+    await expect.poll(() => panelHeight(chart)).toBe(twoRsiHeight);
+
+    await page
+      .getByRole("button", { name: /移除 Donchian Breakout/ })
+      .click();
+    await expect.poll(() => panelHeight(chart)).toBe(twoRsiHeight);
+    await page
+      .getByRole("button", { name: /移除 Relative Strength Index/ })
+      .first()
+      .click();
+    await expect.poll(() => panelHeight(chart)).toBe(baseHeight + 160);
+    await page
+      .getByRole("button", { name: /移除 Relative Strength Index/ })
+      .click();
+    await expect.poll(() => panelHeight(chart)).toBe(baseHeight);
+  });
+
+  test("caps height at two panes, equalizes additional panes and preserves timeframe layouts", async ({
+    page,
+  }) => {
+    const state = createState();
+    await installApiRoutes(page, state);
+    await page.goto("/analysis");
+    await page.getByRole("combobox", { name: "股票搜索" }).fill("AAA");
+    await page.getByText("AAA · Alpha Corp").click();
+    const chart = page.getByTestId("financial-chart");
+
+    await addIndicator(page, "Donchian Breakout");
+    await addIndicator(page, "Relative Strength Index");
+    await addIndicator(page, "Relative Strength Index");
+    await expect(page.getByTestId(/^indicator-pane-legend-/)).toHaveCount(2);
+    const cappedHeight = await panelHeight(chart);
+    const mainInfo = page.getByTestId("financial-chart-info");
+    await expect(mainInfo).toContainText("Donchian Breakout");
+    await expect(mainInfo).not.toContainText("Relative Strength Index");
+
+    await addIndicator(page, "Relative Strength Index");
+    await expect(page.getByTestId(/^indicator-pane-legend-/)).toHaveCount(3);
+    await expect.poll(() => panelHeight(chart)).toBe(cappedHeight);
+    await expect.poll(() => secondaryCanvasHeights(page)).toEqual([128]);
+    await expect(
+      page.getByTestId(/^indicator-pane-legend-/).filter({
+        hasText: "Relative Strength Index",
+      }),
+    ).toHaveCount(3);
+
+    await addIndicator(page, "Relative Strength Index");
+    await expect(page.getByTestId(/^indicator-pane-legend-/)).toHaveCount(4);
+    await expect.poll(() => panelHeight(chart)).toBe(cappedHeight);
+    await expect.poll(() => secondaryCanvasHeights(page)).toEqual([102]);
+
+    for (const timeframe of ["周线", "月线"]) {
+      await page.getByText(timeframe, { exact: true }).click();
+      expect(await panelHeight(chart)).toBe(cappedHeight);
+      await expect.poll(() => panelHeight(chart)).toBe(cappedHeight);
+      await expect.poll(() => secondaryCanvasHeights(page)).toEqual([102]);
+    }
+
+    for (let index = 4; index < 10; index += 1) {
+      await addIndicator(page, "Relative Strength Index");
+    }
+    const compactLegends = page.getByTestId(/^indicator-pane-legend-/);
+    await expect(compactLegends).toHaveCount(10);
+    await expect.poll(() => panelHeight(chart)).toBe(cappedHeight);
+    await expect.poll(() => secondaryCanvasHeights(page)).toEqual([27]);
+    const boxes = await compactLegends.evaluateAll((legends) =>
+      legends.map((legend) => {
+        const box = legend.getBoundingClientRect();
+        return { top: box.top, bottom: box.bottom };
+      }),
+    );
+    for (let index = 1; index < boxes.length; index += 1) {
+      expect(boxes[index].top).toBeGreaterThanOrEqual(boxes[index - 1].bottom);
+    }
+  });
+
+  test("preserves symbol and indicators when leaving and returning to analysis", async ({
+    page,
+  }) => {
+    const state = createState();
+    await installApiRoutes(page, state);
+    await page.goto("/analysis");
+    await page.getByRole("combobox", { name: "股票搜索" }).fill("AAA");
+    await page.getByText("AAA · Alpha Corp").click();
+    await addIndicator(page, "Donchian Breakout");
+    await addIndicator(page, "Relative Strength Index");
+    await expect(page.getByTestId(/^indicator-pane-legend-/)).toHaveCount(1);
+
+    await page.getByRole("link", { name: "Task 管理" }).click();
+    await expect(page).toHaveURL(/\/tasks$/);
+    await page.getByRole("link", { name: "图表分析" }).click();
+
+    await expect(page).toHaveURL(/\/analysis$/);
+    await expect(page.getByRole("combobox", { name: "股票搜索" })).toHaveValue(
+      "AAA · Alpha Corp",
+    );
+    await expect(page.getByText("Donchian Breakout (window=2)")).toBeVisible();
+    await expect(page.getByTestId(/^indicator-pane-legend-/)).toHaveCount(1);
   });
 
   test("manages indicators from the in-chart legend", async ({ page }) => {

@@ -1,23 +1,15 @@
-import { useQuery } from "@tanstack/react-query";
-import {
-  Alert,
-  Button,
-  Card,
-  Empty,
-  Input,
-  InputNumber,
-  Space,
-  Spin,
-  Typography,
-} from "antd";
-import { useEffect, useMemo, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Card, Empty, Space, Spin, Typography } from "antd";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { getSettings } from "../../api/endpoints";
 import { ErrorState } from "../../components/ErrorState";
 import type { MarketSettings, Settings } from "../../types/settings";
 import { MarketSettingsForm } from "./MarketSettingsForm";
-import { marketLabel, withSignals } from "./marketOptions";
-import { useSettingsSave } from "./useSettingsSave";
+import { marketEntries, marketLabel } from "./marketOptions";
+import { useSettingsSave, type SettingsSaveState } from "./useSettingsSave";
+
+const IDLE_SAVE_STATE: SettingsSaveState = { status: "idle", message: null };
 
 function replaceMarket(
   settings: Settings,
@@ -27,15 +19,38 @@ function replaceMarket(
   return { ...settings, markets: { ...settings.markets, [market]: next } };
 }
 
-/** Whole-document editor; every save carries the revision it was based on. */
+function mergeServerWithUnsaved(
+  current: Settings,
+  server: Settings,
+  target: string | null,
+  editing: ReadonlySet<string>,
+): Settings {
+  const markets = Object.fromEntries(
+    Object.entries(server.markets).map(([name, serverMarket]) => [
+      name,
+      name !== target && editing.has(name)
+        ? (current.markets[name] ?? serverMarket)
+        : serverMarket,
+    ]),
+  );
+  return { ...server, markets };
+}
+
+/** Whole-document persistence with independent per-Group editing. */
 export function SettingsPage() {
+  const queryClient = useQueryClient();
   const settingsQuery = useQuery({
     queryKey: ["settings"],
     retry: false,
     queryFn: async () => (await getSettings()).data,
   });
-
   const [draft, setDraft] = useState<Settings | null>(null);
+  const [editingMarkets, setEditingMarkets] = useState<ReadonlySet<string>>(
+    () => new Set<string>(),
+  );
+  const [feedbackMarket, setFeedbackMarket] = useState<string | null>(null);
+  const editingRef = useRef<ReadonlySet<string>>(new Set<string>());
+  const feedbackRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (settingsQuery.data !== undefined && draft === null) {
@@ -43,20 +58,58 @@ export function SettingsPage() {
     }
   }, [settingsQuery.data, draft]);
 
+  const setMarketEditing = (market: string, editing: boolean): void => {
+    const next = new Set(editingRef.current);
+    if (editing) {
+      next.add(market);
+    } else {
+      next.delete(market);
+    }
+    editingRef.current = next;
+    setEditingMarkets(next);
+  };
+
+  const setFeedback = (market: string | null): void => {
+    feedbackRef.current = market;
+    setFeedbackMarket(market);
+  };
+
   const save = useSettingsSave({
-    onSaved: (saved) => setDraft(structuredClone(saved)),
+    onSaved: (saved) => {
+      const target = feedbackRef.current;
+      queryClient.setQueryData(["settings"], saved);
+      setDraft((current) =>
+        current === null
+          ? saved
+          : mergeServerWithUnsaved(current, saved, target, editingRef.current),
+      );
+      if (target !== null) {
+        setMarketEditing(target, false);
+      }
+    },
     onConflict: () => {
+      const target = feedbackRef.current;
       void settingsQuery.refetch().then((result) => {
         if (result.data !== undefined) {
-          setDraft(structuredClone(result.data));
+          setDraft((current) =>
+            current === null
+              ? result.data
+              : mergeServerWithUnsaved(
+                  current,
+                  result.data,
+                  target,
+                  editingRef.current,
+                ),
+          );
         }
       });
     },
   });
 
-  const markets = useMemo(() => (draft === null ? [] : withSignals(draft.markets)), [
-    draft,
-  ]);
+  const markets = useMemo(
+    () => (draft === null ? [] : marketEntries(draft.markets)),
+    [draft],
+  );
 
   if (settingsQuery.error !== null) {
     return (
@@ -79,57 +132,9 @@ export function SettingsPage() {
 
   return (
     <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-      <Typography.Title level={4} style={{ margin: 0 }}>
-        系统设置
-      </Typography.Title>
       <Typography.Text type="secondary">
         保存后立即生效，无需重启后端。当前修订号：{draft.revision}
       </Typography.Text>
-      {save.state.status === "idle" || save.state.message === null ? null : (
-        <Alert
-          type={
-            save.state.status === "conflict"
-              ? "warning"
-              : save.state.status === "saved"
-                ? "success"
-                : "error"
-          }
-          showIcon
-          title={save.state.message}
-        />
-      )}
-      <Card size="small" title="全局">
-        <Space wrap>
-          <Typography.Text>调度时区</Typography.Text>
-          <Input
-            aria-label="调度时区"
-            style={{ width: 200 }}
-            value={draft.timezone}
-            onChange={(event) =>
-              setDraft({ ...draft, timezone: event.target.value })
-            }
-          />
-          <Typography.Text>最大启用指标数</Typography.Text>
-          <InputNumber
-            aria-label="最大启用指标数"
-            min={1}
-            max={100}
-            value={draft.indicators.max_active_indicators}
-            onChange={(value) =>
-              setDraft({
-                ...draft,
-                indicators: {
-                  ...draft.indicators,
-                  max_active_indicators:
-                    typeof value === "number"
-                      ? value
-                      : draft.indicators.max_active_indicators,
-                },
-              })
-            }
-          />
-        </Space>
-      </Card>
       {markets.length === 0 ? (
         <Empty description="配置中没有可选市场" />
       ) : (
@@ -138,34 +143,47 @@ export function SettingsPage() {
             key={market}
             market={market}
             settings={settings}
-            disabled={save.state.status === "saving"}
-            onChange={(next) => setDraft(replaceMarket(draft, market, next))}
+            editing={editingMarkets.has(market)}
+            busy={save.state.status === "saving"}
+            saveState={feedbackMarket === market ? save.state : IDLE_SAVE_STATE}
+            onEdit={() => {
+              setMarketEditing(market, true);
+              setFeedback(null);
+              save.reset();
+            }}
+            onDiscard={() => {
+              const baseline = settingsQuery.data?.markets[market];
+              if (baseline !== undefined) {
+                setDraft((current) =>
+                  current === null ? current : replaceMarket(current, market, baseline),
+                );
+              }
+              setMarketEditing(market, false);
+              if (feedbackRef.current === market) {
+                setFeedback(null);
+                save.reset();
+              }
+            }}
+            onSave={(next) => {
+              const baseline = settingsQuery.data;
+              if (baseline !== undefined) {
+                setFeedback(market);
+                save.save(replaceMarket(baseline, market, next));
+              }
+            }}
+            onChange={(next) =>
+              setDraft((current) =>
+                current === null ? current : replaceMarket(current, market, next),
+              )
+            }
           />
         ))
       )}
-      <Space>
-        <Button
-          type="primary"
-          loading={save.state.status === "saving"}
-          onClick={() => save.save(draft)}
-        >
-          保存设置
-        </Button>
-        <Button
-          disabled={save.state.status === "saving"}
-          onClick={() => {
-            if (settingsQuery.data !== undefined) {
-              setDraft(structuredClone(settingsQuery.data));
-              save.reset();
-            }
-          }}
-        >
-          放弃修改
-        </Button>
+      {markets.length === 0 ? null : (
         <Typography.Text type="secondary" style={{ fontSize: 12 }}>
           市场：{markets.map(([market]) => marketLabel(market)).join("、")}
         </Typography.Text>
-      </Space>
+      )}
     </Space>
   );
 }

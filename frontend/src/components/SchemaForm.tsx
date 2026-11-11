@@ -1,8 +1,10 @@
 import { generateForm } from "@rjsf/antd";
-import type { IChangeEvent } from "@rjsf/core";
-import type { RJSFSchema, UiSchema } from "@rjsf/utils";
+import type { FormProps, IChangeEvent } from "@rjsf/core";
+import { getSubmitButtonOptions } from "@rjsf/utils";
+import type { FormContextType, RJSFSchema, SubmitButtonProps, UiSchema } from "@rjsf/utils";
 import validator from "@rjsf/validator-ajv8";
-import { useMemo } from "react";
+import { Button } from "antd";
+import { useMemo, type ReactNode } from "react";
 
 export interface SchemaFormProps<T extends Record<string, unknown>> {
   schema: RJSFSchema;
@@ -10,6 +12,10 @@ export interface SchemaFormProps<T extends Record<string, unknown>> {
   onSubmit: (data: T) => void;
   disabled?: boolean;
   submitText?: string;
+  formContext?: FormContextType;
+  actions?: ReactNode;
+  uiSchema?: UiSchema<T>;
+  widgets?: FormProps<T>["widgets"];
 }
 
 function submitUiSchema<T extends Record<string, unknown>>(
@@ -30,6 +36,10 @@ export function SchemaForm<T extends Record<string, unknown>>({
   onSubmit,
   disabled = false,
   submitText = "Submit",
+  formContext,
+  actions,
+  uiSchema: customUiSchema,
+  widgets,
 }: SchemaFormProps<T>) {
   const TypedForm = useMemo(() => generateForm<T>(), []);
   const isolatedFormData = useMemo(
@@ -37,9 +47,32 @@ export function SchemaForm<T extends Record<string, unknown>>({
     [formData],
   );
   const uiSchema = useMemo(
-    () => submitUiSchema<T>(disabled, submitText),
-    [disabled, submitText],
+    () => ({
+      ...customUiSchema,
+      ...submitUiSchema<T>(disabled, submitText),
+    }),
+    [customUiSchema, disabled, submitText],
   );
+  const templates = useMemo(() => {
+    if (actions === undefined) {
+      return undefined;
+    }
+    return {
+      ButtonTemplates: {
+        SubmitButton: (props: SubmitButtonProps) => {
+          const options = getSubmitButtonOptions(props.uiSchema);
+          return (
+            <div className="schema-form-actions">
+              <Button type="primary" htmlType="submit" {...options.props}>
+                {options.submitText}
+              </Button>
+              {actions}
+            </div>
+          );
+        },
+      },
+    };
+  }, [actions]);
 
   const handleSubmit = (event: IChangeEvent<T>): void => {
     if (event.formData === undefined) {
@@ -55,6 +88,9 @@ export function SchemaForm<T extends Record<string, unknown>>({
       formData={isolatedFormData}
       validator={validator}
       disabled={disabled}
+      formContext={formContext}
+      templates={templates}
+      widgets={widgets}
       onSubmit={handleSubmit}
     />
   );

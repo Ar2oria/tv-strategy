@@ -49,6 +49,13 @@ export const settingsPayload = {
       cron: "0 0 * * *",
       params: { value: 1, nested: [true, null] },
     },
+    "market.sync_crypto_daily": {
+      enabled: false,
+      cron: "0 0 * * *",
+      params: {
+        spot_pairs: [{ exchange: "binance", symbol: "BTC/USDT" }],
+      },
+    },
   },
 };
 

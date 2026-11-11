@@ -1,0 +1,425 @@
+:root {
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: #0d1117;
+}
+
+html,
+body,
+body > #root {
+  min-width: 320px;
+  min-height: 100%;
+  margin: 0;
+  background: #0d1117;
+}
+
+.app-content {
+  min-width: 0;
+  padding: 16px;
+  background: #0d1117;
+}
+
+.app-content .ant-space,
+.app-content .ant-space-item,
+.app-content .ant-card {
+  min-width: 0;
+}
+
+.app-content .ant-card-head-title {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 575px) {
+  .app-content {
+    padding: 8px;
+  }
+}
+
+/* Task configuration: single-column, readable dark schema forms. */
+.task-config-drawer .ant-drawer-section,
+.task-config-drawer .ant-drawer-header,
+.task-config-drawer .ant-drawer-body {
+  background: #202634;
+  color: #e6e9f0;
+}
+
+.task-config-drawer .ant-drawer-header {
+  border-bottom: 1px solid #344054;
+}
+
+.task-config-drawer .ant-drawer-title,
+.task-config-drawer .ant-drawer-close,
+.task-config-drawer .ant-typography,
+.task-config-drawer .ant-form-item-label > label,
+.task-config-drawer .ant-form-item-label label,
+.task-config-drawer .ant-form-item-extra,
+.task-config-drawer legend {
+  color: #e6e9f0;
+}
+
+.task-config-drawer .ant-typography-secondary,
+.task-config-drawer .ant-form-item-extra,
+.task-config-drawer .ant-form-item-explain-help,
+.task-config-drawer input::placeholder,
+.task-config-drawer textarea::placeholder {
+  color: #a6adbd;
+}
+
+.task-config-drawer .ant-form-item-explain-error {
+  color: #f23645;
+}
+
+.task-config-drawer .ant-drawer-body {
+  padding: 20px;
+  overflow-x: hidden;
+}
+
+.task-schema-form {
+  min-width: 0;
+  color: #e6e9f0;
+}
+
+.task-schema-form fieldset {
+  min-width: 0;
+  margin: 0 0 16px;
+  padding: 0;
+  border: 0;
+}
+
+.task-schema-form .ant-row,
+.task-schema-form .ant-col,
+.task-schema-form .ant-form-item-control,
+.task-schema-form .ant-form-item-control-input,
+.task-schema-form .ant-form-item-control-input-content {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.task-schema-form .ant-form-item {
+  margin-bottom: 16px;
+}
+
+.task-schema-form .ant-form-item-label {
+  text-align: left;
+}
+
+.task-schema-form fieldset fieldset {
+  margin-bottom: 12px;
+  padding: 12px;
+  background: #262e40;
+  border: 1px solid #344054;
+  border-radius: 4px;
+}
+
+.task-config-drawer .ant-input-affix-wrapper,
+.market-group .ant-input-affix-wrapper {
+  color: #e6e9f0 !important;
+  background: #202634 !important;
+  border-color: #344054 !important;
+}
+
+.task-config-drawer .ant-input-affix-wrapper:focus-within,
+.market-group .ant-input-affix-wrapper:focus-within {
+  border-color: #2962ff !important;
+}
+
+.task-config-drawer .ant-input,
+.task-config-drawer .ant-input-number {
+  color: #e6e9f0 !important;
+  background: #202634 !important;
+  border-color: #344054 !important;
+}
+
+.task-config-drawer .ant-input-number {
+  max-width: 100%;
+}
+
+.task-config-drawer .ant-input-number-input,
+.task-config-drawer .ant-select-selection-item,
+.task-config-drawer .ant-select-suffix {
+  color: #e6e9f0 !important;
+  background: transparent !important;
+}
+
+.task-config-drawer .ant-btn-default {
+  color: #e6e9f0;
+  background: #202634;
+  border-color: #344054;
+}
+
+.task-config-drawer .ant-btn-primary {
+  color: #ffffff;
+  background: #2962ff;
+  border-color: #2962ff;
+}
+
+@media (max-width: 575px) {
+  .task-config-drawer .ant-drawer-body {
+    padding: 16px;
+  }
+
+  .task-schema-form .ant-row:has(> .ant-col > .rjsf-field-object) {
+    display: flex;
+    flex-wrap: wrap;
+    column-gap: 0;
+    row-gap: 8px;
+  }
+
+  .task-schema-form .ant-row:has(> .ant-col > .rjsf-field-object) > .ant-col {
+    flex: 0 0 100% !important;
+    max-width: 100% !important;
+  }
+
+  .task-schema-form .ant-row:has(> .ant-col > .rjsf-field-object) > .ant-col:last-child {
+    margin-top: 8px !important;
+  }
+
+  .task-schema-form .ant-row {
+    margin-right: 0 !important;
+    margin-left: 0 !important;
+  }
+
+  .task-schema-form .ant-row > .ant-col {
+    padding-right: 0 !important;
+    padding-left: 0 !important;
+  }
+
+  .task-schema-form fieldset fieldset .ant-space-compact {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+
+/* Unified dark Task parameters, only one step lighter than the Drawer. */
+.task-schema-form {
+  padding: 16px;
+  color: #e6e9f0;
+  background: #262e40;
+  border: 1px solid #344054;
+  border-radius: 6px;
+}
+
+.task-config-drawer .task-schema-form .ant-typography,
+.task-config-drawer .task-schema-form .ant-form-item-label > label,
+.task-config-drawer .task-schema-form .ant-form-item-label label,
+.task-config-drawer .task-schema-form .ant-checkbox-wrapper,
+.task-config-drawer .task-schema-form legend {
+  color: #e6e9f0;
+}
+
+.task-config-drawer .task-schema-form .ant-typography-secondary,
+.task-config-drawer .task-schema-form .ant-form-item-extra,
+.task-config-drawer .task-schema-form .ant-form-item-explain-help,
+.task-config-drawer .task-schema-form input::placeholder,
+.task-config-drawer .task-schema-form textarea::placeholder,
+.task-config-drawer .task-schema-form .ant-select-placeholder {
+  color: #a6adbd !important;
+}
+
+.task-config-drawer .task-schema-form .ant-form-item-explain-error {
+  color: #f23645;
+}
+
+.task-config-drawer .task-schema-form .ant-input,
+.task-config-drawer .task-schema-form .ant-input-number,
+.task-config-drawer .task-schema-form .ant-select {
+  color: #e6e9f0 !important;
+  background: #202634 !important;
+  border-color: #344054 !important;
+}
+
+.task-config-drawer .task-schema-form .ant-select {
+  border: 1px solid #344054 !important;
+  border-radius: 4px;
+}
+
+.task-config-drawer .task-schema-form .ant-input-number-input,
+.task-config-drawer .task-schema-form .ant-select-input,
+.task-config-drawer .task-schema-form .ant-select-content,
+.task-config-drawer .task-schema-form .ant-select-selection-item,
+.task-config-drawer .task-schema-form .ant-select-suffix {
+  color: #e6e9f0 !important;
+  background: transparent !important;
+}
+
+.task-schema-form fieldset fieldset {
+  background: #262e40;
+  border-color: #344054;
+}
+
+.task-config-drawer .task-schema-form .ant-btn-default {
+  color: #e6e9f0;
+  background: #202634;
+  border-color: #344054;
+}
+
+.task-config-drawer .task-schema-form .ant-checkbox {
+  background: #202634 !important;
+  border-color: #344054 !important;
+}
+
+.task-config-drawer .task-schema-form .ant-checkbox-checked {
+  background: #2962ff !important;
+  border-color: #2962ff !important;
+}
+
+.task-config-drawer .task-schema-form .ant-checkbox-checked::before,
+.task-config-drawer .task-schema-form .ant-checkbox-checked::after {
+  border-color: #ffffff !important;
+}
+
+.task-config-drawer .ant-switch {
+  background: #344054 !important;
+}
+
+.task-config-drawer .ant-switch-checked {
+  background: #2962ff !important;
+}
+
+.task-config-drawer .ant-input-number-actions,
+.market-group .ant-input-number-actions {
+  background: #202634 !important;
+}
+
+.task-config-drawer .ant-input-number-action,
+.market-group .ant-input-number-action {
+  color: #e6e9f0 !important;
+  background: #202634 !important;
+}
+
+.task-config-drawer .ant-input-number-action:hover,
+.market-group .ant-input-number-action:hover {
+  color: #e6e9f0 !important;
+  background: #262e40 !important;
+}
+
+.market-group-readonly .ant-input-number-action {
+  color: #a6adbd !important;
+}
+
+.task-schema-form .schema-form-actions {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.market-group .ant-card-head-wrapper {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.market-group .ant-input,
+.market-group .ant-input-number,
+.market-group .ant-select {
+  color: #e6e9f0 !important;
+  background: #202634 !important;
+  border-color: #344054 !important;
+}
+
+.market-group .ant-select {
+  border: 1px solid #344054 !important;
+  border-radius: 4px;
+}
+
+.market-group .ant-select-input,
+.market-group .ant-select-content,
+.market-group .ant-select-placeholder,
+.market-group .ant-select-suffix,
+.market-group .ant-input-number-input {
+  color: #e6e9f0 !important;
+  background: transparent !important;
+}
+
+.market-group-readonly .ant-input,
+.market-group-readonly .ant-input-number,
+.market-group-readonly .ant-select,
+.market-group-readonly .ant-select-input,
+.market-group-readonly .ant-select-content,
+.market-group-readonly .ant-select-placeholder,
+.market-group-readonly .ant-select-suffix,
+.market-group-readonly .ant-input-number-input {
+  color: #a6adbd !important;
+}
+
+/* Keep browser autofill from reintroducing light backgrounds/brown borders. */
+.task-config-drawer input:-webkit-autofill,
+.task-config-drawer textarea:-webkit-autofill,
+.market-group input:-webkit-autofill,
+.market-group textarea:-webkit-autofill {
+  -webkit-text-fill-color: #e6e9f0 !important;
+  caret-color: #e6e9f0 !important;
+  border-color: #344054 !important;
+  -webkit-box-shadow: 0 0 0 1000px #202634 inset !important;
+  box-shadow: 0 0 0 1000px #202634 inset !important;
+}
+
+.task-config-drawer input:-webkit-autofill::selection,
+.task-config-drawer textarea:-webkit-autofill::selection,
+.market-group input:-webkit-autofill::selection,
+.market-group textarea:-webkit-autofill::selection {
+  color: #e6e9f0 !important;
+  background: #344054 !important;
+}
+
+/* Route-backed native tabs; visual only, page instances stay mounted. */
+.workspace-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0;
+  min-height: 37px;
+  padding: 0 8px;
+  border-bottom: 1px solid #2a2e39;
+}
+
+.workspace-tab-shell {
+  display: inline-flex;
+  align-items: center;
+  margin: 0 4px -1px 0;
+  color: #9598a1;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 6px 6px 0 0;
+}
+
+.workspace-tab-shell.workspace-tab-active {
+  color: #ffffff;
+  background: #1e222d;
+  border-color: #2a2e39;
+  border-top: 2px solid #2962ff;
+}
+
+.workspace-tab,
+.workspace-tab-close {
+  min-height: 34px;
+  padding: 6px 8px;
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.workspace-tab-close {
+  padding-right: 6px;
+  padding-left: 6px;
+  color: #9598a1;
+  font-size: 15px;
+  line-height: 1;
+}
+
+.workspace-tab:hover,
+.workspace-tab-close:hover {
+  color: #ffffff;
+  background: #2a2e39;
+}
+
+.workspace-tab:focus-visible,
+.workspace-tab-close:focus-visible {
+  outline: 2px solid #2962ff;
+  outline-offset: -2px;
+}

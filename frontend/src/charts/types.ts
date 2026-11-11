@@ -44,6 +44,14 @@ export interface ChartPaneBinding {
   priceScale: "left" | "right";
 }
 
+/** Pixel position of a secondary pane within the shared plot container. */
+export interface ChartPaneLayout {
+  key: string;
+  paneIndex: number;
+  top: number;
+  height: number;
+}
+
 export interface ChartSeriesBinding {
   id: string;
   instanceId: string;

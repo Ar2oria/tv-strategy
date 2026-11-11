@@ -1,16 +1,18 @@
 import { useQuery } from "@tanstack/react-query";
 import { lazy, Suspense } from "react";
-import { Alert, Card, Empty, Radio, Space, Spin, Typography } from "antd";
+import { Alert, Empty, Space, Spin, Typography } from "antd";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ErrorState } from "../../components/ErrorState";
 import { getBars, listIndicators, listInstruments } from "../../api/endpoints";
 
 import type { JsonObject } from "../../types/api";
-import type { BarDTO, Timeframe, InstrumentRecord } from "../../types/market";
+import type { BarDTO } from "../../types/market";
 import { IndicatorEditor } from "./IndicatorEditor";
-import { AddIndicatorButton, IndicatorPicker } from "./IndicatorPicker";
-import { IndicatorLegend } from "../../charts/IndicatorLegend";
+import { IndicatorPicker } from "./IndicatorPicker";
+import { ChartToolbar } from "./ChartToolbar";
+import { useAnalysisSession } from "./AnalysisSession";
+import { IndicatorLegend, type IndicatorLegendItem } from "../../charts/IndicatorLegend";
 import { getChartTheme } from "../../charts/theme";
 import {
   addInstance,
@@ -19,7 +21,7 @@ import {
   updateInstanceParams,
   type ActiveIndicatorInstance,
 } from "./indicatorInstances";
-import { InstrumentSelector, SEARCH_DEBOUNCE_MS } from "./InstrumentSelector";
+import { SEARCH_DEBOUNCE_MS } from "./InstrumentSelector";
 import { useIndicatorComputation } from "./useIndicatorComputation";
 
 const FinancialChart = lazy(() =>
@@ -29,11 +31,6 @@ const FinancialChart = lazy(() =>
 );
 
 const BAR_PAGE_SIZE = 1000;
-const TIMEFRAME_OPTIONS: ReadonlyArray<{ label: string; value: Timeframe }> = [
-  { label: "日线", value: "1d" },
-  { label: "周线", value: "1w" },
-  { label: "月线", value: "1M" },
-];
 
 function useDebounced<T>(value: T, delay: number): T {
   const [debounced, setDebounced] = useState(value);
@@ -44,21 +41,43 @@ function useDebounced<T>(value: T, delay: number): T {
   return debounced;
 }
 
+type AnalysisLegendItem = IndicatorLegendItem & { paneId: string };
+
+function legendsForPane(
+  items: readonly AnalysisLegendItem[],
+  paneId?: string,
+): readonly AnalysisLegendItem[] {
+  if (paneId === undefined) {
+    return items;
+  }
+  return items.filter((item) => {
+    if (paneId === "main") {
+      return item.paneId === "main" || !item.visible || item.error !== null;
+    }
+    return item.visible && item.error === null && item.paneId === paneId;
+  });
+}
+
 export function AnalysisPage() {
-  const [search, setSearch] = useState("");
+  const {
+    search,
+    setSearch,
+    instrument,
+    setInstrument,
+    timeframe,
+    setTimeframe,
+    instances,
+    setInstances,
+    hiddenInstances,
+    setHiddenInstances,
+  } = useAnalysisSession();
   const debouncedSearch = useDebounced(search, SEARCH_DEBOUNCE_MS);
-  const [instrument, setInstrument] = useState<InstrumentRecord | null>(null);
-  const [timeframe, setTimeframe] = useState<Timeframe>("1d");
   const [olderBars, setOlderBars] = useState<BarDTO[]>([]);
   const [exhausted, setExhausted] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [pagingError, setPagingError] = useState<string | null>(null);
   const [activeTime, setActiveTime] = useState<string | null>(null);
-  const [hiddenInstances, setHiddenInstances] = useState<ReadonlySet<string>>(
-    () => new Set(),
-  );
   const inFlight = useRef(false);
-  const [instances, setInstances] = useState<ActiveIndicatorInstance[]>([]);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [editing, setEditing] = useState<ActiveIndicatorInstance | null>(null);
 
@@ -204,7 +223,7 @@ export function AnalysisPage() {
     setEditing(null);
   };
 
-  const legendItems = instances.map((instance) => {
+  const legendItems: AnalysisLegendItem[] = instances.map((instance) => {
     const result = computation.computations.find(
       (item) => item.instance_id === instance.instanceId,
     );
@@ -225,8 +244,11 @@ export function AnalysisPage() {
                   },
                 ];
           });
+    const paneId =
+      result?.panes.find((pane) => pane.id !== "main")?.id ?? "main";
     return {
       instanceId: instance.instanceId,
+      paneId,
       label: describeInstance(instance),
       values,
       error: result?.error ?? null,
@@ -236,144 +258,123 @@ export function AnalysisPage() {
   const visibleComputations = computation.computations.filter(
     (item) => !hiddenInstances.has(item.instance_id),
   );
+  const chartState = databasesEmpty ? (
+    <Empty
+      description={
+        <Space orientation="vertical">
+          <Typography.Text strong>本地数据库尚未同步任何证券数据。</Typography.Text>
+          <Typography.Text type="secondary">
+            请先到「Task 管理」页启用并立即执行证券列表与日线同步任务，
+            完成后再回到本页选择股票。
+          </Typography.Text>
+        </Space>
+      }
+    />
+  ) : instrument === null ? (
+    <Empty description="请选择证券以加载 K 线。" />
+  ) : barsQuery.error !== null ? (
+    <ErrorState
+      error={barsQuery.error}
+      onRetry={() => {
+        void barsQuery.refetch();
+      }}
+    />
+  ) : barsQuery.isPending ? (
+    <div style={{ padding: 48, textAlign: "center" }}>
+      <Spin />
+    </div>
+  ) : null;
 
   return (
     <Space orientation="vertical" size="middle" style={{ width: "100%" }}>
-      <Card size="small" styles={{ body: { padding: 12 } }}>
-        <Space wrap size="middle" style={{ width: "100%" }}>
-          <div style={{ minWidth: 260, flex: "1 1 260px", maxWidth: 380 }}>
-            <InstrumentSelector
-              instruments={instruments}
-              loading={instrumentsQuery.isFetching}
-              selected={instrument}
-              search={search}
-              onSearchChange={setSearch}
-              onSelect={setInstrument}
-            />
-          </div>
-          <Radio.Group
-            aria-label="周期"
-            value={timeframe}
-            onChange={(event) => setTimeframe(event.target.value as Timeframe)}
-            options={TIMEFRAME_OPTIONS.map((option) => ({
-              label: option.label,
-              value: option.value,
-            }))}
-            optionType="button"
-          />
-          <AddIndicatorButton onOpen={() => setPickerOpen(true)} />
-        </Space>
-      </Card>
-
-      {databasesEmpty ? (
-        <Card>
-          <Empty
-            description={
-              <Space orientation="vertical">
-                <Typography.Text strong>
-                  本地数据库尚未同步任何证券数据。
-                </Typography.Text>
-                <Typography.Text type="secondary">
-                  请先到「Task 管理」页启用并立即执行证券列表与日线同步任务，
-                  完成后再回到本页选择股票。
-                </Typography.Text>
-              </Space>
-            }
-          />
-        </Card>
-      ) : instrument === null ? (
-        <Card>
-          <Empty description="请在上方选择证券以加载 K 线。" />
-        </Card>
-      ) : barsQuery.error !== null ? (
-        <ErrorState
-          error={barsQuery.error}
-          onRetry={() => {
-            void barsQuery.refetch();
-          }}
+      {computation.error === null ? null : (
+        <Alert
+          type="error"
+          showIcon
+          title="指标计算请求失败，已保留 K 线。"
+          description={
+            computation.error instanceof Error
+              ? computation.error.message
+              : undefined
+          }
         />
-      ) : barsQuery.isPending ? (
-        <Card>
-          <Spin />
-        </Card>
-      ) : (
-        <>
-          {computation.error === null ? null : (
-            <Alert
-              type="error"
-              showIcon
-              title="指标计算请求失败，已保留 K 线。"
-              description={
-                computation.error instanceof Error
-                  ? computation.error.message
-                  : undefined
+      )}
+      {pagingError === null ? null : (
+        <Alert
+          type="error"
+          showIcon
+          title="加载更早历史失败，K 线与指标已保留。"
+          description={pagingError}
+        />
+      )}
+      {loadingMore ? (
+        <Alert type="info" showIcon title="正在加载更早的历史…" />
+      ) : null}
+      {/* Reserved height keeps the chart from jumping when the hint
+          disappears after the first indicator is added. */}
+      <div style={{ minHeight: 22 }}>
+        {chartState === null && instances.length === 0 ? (
+          <Typography.Text type="secondary">
+            尚未添加指标。点击「添加指标」从后端可用指标中选择。
+          </Typography.Text>
+        ) : null}
+      </div>
+      <Suspense fallback={<Spin />}>
+        <FinancialChart
+          bars={loadedBars}
+          computations={visibleComputations}
+          symbol={instrument?.symbol ?? ""}
+          timeframe={timeframe}
+          stateContent={chartState}
+          toolbar={
+            <ChartToolbar
+              instruments={instruments}
+              instrumentsLoading={instrumentsQuery.isFetching}
+              selectedInstrument={instrument}
+              search={search}
+              timeframe={timeframe}
+              onSearchChange={setSearch}
+              onSelectInstrument={setInstrument}
+              onTimeframeChange={setTimeframe}
+              onAddIndicator={() => setPickerOpen(true)}
+            />
+          }
+          onNearLeftEdge={() => {
+            void loadOlderBars();
+          }}
+          onActiveTimeChange={setActiveTime}
+          renderIndicatorLegend={({ paneId }) => (
+            <IndicatorLegend
+              items={legendsForPane(legendItems, paneId)}
+              theme={getChartTheme("dark")}
+              onEdit={(instanceId) => {
+                const target = instances.find(
+                  (item) => item.instanceId === instanceId,
+                );
+                if (target !== undefined) {
+                  setEditing(target);
+                }
+              }}
+              onToggleVisibility={(instanceId) =>
+                setHiddenInstances((current) => {
+                  const next = new Set(current);
+                  if (next.has(instanceId)) {
+                    next.delete(instanceId);
+                  } else {
+                    next.add(instanceId);
+                  }
+                  return next;
+                })
+              }
+              onRemove={(instanceId) =>
+                setInstances((current) =>
+                  removeInstance(current, instanceId),
+                )
               }
             />
           )}
-          {pagingError === null ? null : (
-            <Alert
-              type="error"
-              showIcon
-              title="加载更早历史失败，K 线与指标已保留。"
-              description={pagingError}
-            />
-          )}
-          {loadingMore ? (
-            <Alert type="info" showIcon title="正在加载更早的历史…" />
-          ) : null}
-          {/* Reserved height keeps the chart from jumping when the hint
-              disappears after the first indicator is added. */}
-          <div style={{ minHeight: 22 }}>
-            {instances.length === 0 ? (
-              <Typography.Text type="secondary">
-                尚未添加指标。点击「添加指标」从后端可用指标中选择。
-              </Typography.Text>
-            ) : null}
-          </div>
-          <Suspense fallback={<Spin />}>
-            <FinancialChart
-              bars={loadedBars}
-              computations={visibleComputations}
-              symbol={instrument.symbol}
-              timeframe={timeframe}
-              onNearLeftEdge={() => {
-                void loadOlderBars();
-              }}
-              onActiveTimeChange={setActiveTime}
-              renderIndicatorLegend={() => (
-                <IndicatorLegend
-                  items={legendItems}
-                  theme={getChartTheme("light")}
-                  onEdit={(instanceId) => {
-                    const target = instances.find(
-                      (item) => item.instanceId === instanceId,
-                    );
-                    if (target !== undefined) {
-                      setEditing(target);
-                    }
-                  }}
-                  onToggleVisibility={(instanceId) =>
-                    setHiddenInstances((current) => {
-                      const next = new Set(current);
-                      if (next.has(instanceId)) {
-                        next.delete(instanceId);
-                      } else {
-                        next.add(instanceId);
-                      }
-                      return next;
-                    })
-                  }
-                  onRemove={(instanceId) =>
-                    setInstances((current) =>
-                      removeInstance(current, instanceId),
-                    )
-                  }
-                />
-              )}
-            />
-          </Suspense>
-        </>
-      )}
+        />
+      </Suspense>
       <IndicatorPicker
         open={pickerOpen}
         descriptors={descriptorsQuery.data ?? []}

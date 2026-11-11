@@ -78,6 +78,27 @@ describe("useIndicatorComputation", () => {
     expect(requests).toHaveLength(0);
   });
 
+  it("waits for a bar start before enabling indicator computation", async () => {
+    const { rerender } = renderHook(
+      (props: { start: string | null }) =>
+        useIndicatorComputation({
+          ...BASE,
+          start: props.start,
+          instances: [instance(14)],
+        }),
+      { wrapper, initialProps: { start: null as string | null } },
+    );
+
+    await act(async () => {
+      vi.advanceTimersByTime(1000);
+    });
+    expect(requests).toHaveLength(0);
+
+    rerender({ start: "2024-01-01" });
+    await waitFor(() => expect(requests).toHaveLength(1));
+    expect(requests[0]).toMatchObject({ start: "2024-01-01" });
+  });
+
   it("debounces rapid parameter edits into a single request", async () => {
     const { rerender } = renderHook(
       (props: { instances: ActiveIndicatorInstance[] }) =>

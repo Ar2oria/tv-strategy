@@ -1,4 +1,4 @@
-import { AutoComplete, Typography } from "antd";
+import { AutoComplete } from "antd";
 import { useEffect, useMemo, useState } from "react";
 
 import type { InstrumentRecord } from "../../types/market";
@@ -33,7 +33,9 @@ export function InstrumentSelector({
 
   useEffect(() => {
     setValue(selected === null ? search : label(selected));
-  }, [selected, search]);
+    // Only a new selection may overwrite text; search changes are user edits.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected]);
 
   const options = useMemo(
     () =>
@@ -46,11 +48,10 @@ export function InstrumentSelector({
   );
 
   return (
-    <div>
-      <Typography.Text strong>证券</Typography.Text>
+    <div style={{ width: "100%" }}>
       <AutoComplete
         aria-label="股票搜索"
-        style={{ width: "100%", marginTop: 4 }}
+        style={{ width: "100%" }}
         value={value}
         options={options}
         placeholder="输入代码或名称搜索"

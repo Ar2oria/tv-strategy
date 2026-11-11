@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { BarDTO } from "../types/market";
@@ -20,6 +20,7 @@ type MockSeries = {
 
 type MockPane = {
   setHeight: ReturnType<typeof vi.fn>;
+  setStretchFactor: ReturnType<typeof vi.fn>;
   paneIndex: ReturnType<typeof vi.fn>;
   getSeries: ReturnType<typeof vi.fn>;
   series: MockSeries[];
@@ -130,6 +131,7 @@ vi.mock("lightweight-charts", () => {
       paneRecords = [
         {
           setHeight: vi.fn(),
+          setStretchFactor: vi.fn(),
           paneIndex: vi.fn(() => 0),
           getSeries: vi.fn(() => paneRecords[0]?.series ?? []),
           series: [],
@@ -165,6 +167,7 @@ vi.mock("lightweight-charts", () => {
           chartCalls.addPane += 1;
           const pane: MockPane = {
             setHeight: vi.fn(),
+            setStretchFactor: vi.fn(),
             paneIndex: vi.fn(() => paneRecords.indexOf(pane)),
             getSeries: vi.fn(() => pane.series),
             series: [],
@@ -192,6 +195,7 @@ vi.mock("lightweight-charts", () => {
         timeScale: vi.fn(() => ({
           subscribeVisibleLogicalRangeChange: vi.fn(),
           unsubscribeVisibleLogicalRangeChange: vi.fn(),
+          height: vi.fn(() => 28),
           getVisibleRange: vi.fn(() => null),
           setVisibleRange: vi.fn(),
         })),
@@ -669,6 +673,124 @@ describe("FinancialChart", () => {
     expect(summary).toHaveTextContent("2 个数据点");
     expect(summary).toHaveTextContent("1 个标记");
   });
+
+  it("places each indicator card on its own pane", () => {
+    render(
+      <FinancialChart
+        bars={BARS}
+        computations={[RSI]}
+        toolbar={<button type="button">图表工具栏</button>}
+        renderIndicatorLegend={({ paneId }) => (
+          <div data-testid={`indicator-card-${paneId}`} />
+        )}
+      />,
+    );
+
+    const chart = screen.getByTestId("financial-chart");
+    expect(chart).toHaveStyle({ backgroundColor: "#131722" });
+    expect(
+      within(chart).getByRole("button", { name: "图表工具栏" }),
+    ).toBeInTheDocument();
+    const info = within(chart).getByTestId("financial-chart-info");
+    expect(info).toContainElement(screen.getByTestId("chart-header"));
+    expect(info).toContainElement(screen.getByTestId("indicator-card-main"));
+    expect(info.nextElementSibling).toBe(
+      screen.getByTestId("financial-chart-plot"),
+    );
+    const secondary = within(chart).getByTestId("indicator-pane-legend-r1:rsi");
+    expect(secondary).toContainElement(
+      screen.getByTestId("indicator-card-r1:rsi"),
+    );
+  });
+
+  it("keeps the toolbar available with a custom empty or error state", () => {
+    render(
+      <FinancialChart
+        bars={[]}
+        computations={[]}
+        toolbar={<button type="button">选择证券</button>}
+        stateContent={<div>请选择证券后加载 K 线</div>}
+      />,
+    );
+
+    const chart = screen.getByTestId("financial-chart");
+    expect(
+      within(chart).getByRole("button", { name: "选择证券" }),
+    ).toBeInTheDocument();
+    expect(
+      within(chart).getByText("请选择证券后加载 K 线"),
+    ).toBeInTheDocument();
+  });
+
+  it("clears stale hover after a loading and symbol transition", async () => {
+    const { rerender } = render(
+      <FinancialChart bars={BARS} computations={[]} symbol="AAA" />,
+    );
+    await waitFor(() => expect(crosshairHandler).not.toBeNull());
+    act(() => {
+      crosshairHandler?.({ time: "2026-01-05", point: { x: 40, y: 30 } });
+    });
+    expect(await screen.findByRole("tooltip")).toBeInTheDocument();
+
+    rerender(
+      <FinancialChart
+        bars={[]}
+        computations={[]}
+        symbol="BBB"
+        stateContent={<div>正在加载 BBB</div>}
+      />,
+    );
+    rerender(<FinancialChart bars={BARS} computations={[]} symbol="BBB" />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("chart-header-date")).toHaveTextContent(
+        "2026-01-06（最新）",
+      ),
+    );
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("suppresses stale indicator validation while state content is shown", async () => {
+    const { rerender } = render(
+      <FinancialChart bars={BARS} computations={[RSI]} />,
+    );
+    await waitFor(() => expect(chartCalls.addPane).toBe(1));
+
+    rerender(
+      <FinancialChart
+        bars={[]}
+        computations={[RSI]}
+        stateContent={<div>正在加载新证券</div>}
+      />,
+    );
+
+    expect(screen.getByText("正在加载新证券")).toBeInTheDocument();
+    expect(
+      screen.getByTestId("financial-chart-canvas").style.getPropertyValue("--chart-height"),
+    ).toBe("calc(clamp(360px, calc(100vh - 320px), 560px) + 150px)");
+    expect(screen.queryByText(/不存在于返回的 K 线/)).not.toBeInTheDocument();
+  });
+
+  it("adds only secondary pane heights to the canvas", () => {
+    const { rerender } = render(<FinancialChart bars={BARS} computations={[]} />);
+    const canvas = () => screen.getByTestId("financial-chart-canvas");
+    const baseHeight = "clamp(360px, calc(100vh - 320px), 560px)";
+    expect(canvas().style.getPropertyValue("--chart-height")).toBe(baseHeight);
+
+    rerender(<FinancialChart bars={BARS} computations={[DONCHIAN]} />);
+    expect(canvas().style.getPropertyValue("--chart-height")).toBe(baseHeight);
+
+    rerender(<FinancialChart bars={BARS} computations={[DONCHIAN, RSI]} />);
+    expect(canvas().style.getPropertyValue("--chart-height")).toBe(
+      "calc(clamp(360px, calc(100vh - 320px), 560px) + 150px)",
+    );
+
+    rerender(<FinancialChart bars={BARS} computations={[DONCHIAN]} />);
+    expect(canvas().style.getPropertyValue("--chart-height")).toBe(baseHeight);
+
+    rerender(<FinancialChart bars={BARS} computations={[]} />);
+    expect(canvas().style.getPropertyValue("--chart-height")).toBe(baseHeight);
+  });
 });
 
 describe("chart theme", () => {
@@ -677,9 +799,9 @@ describe("chart theme", () => {
     const dark = getChartTheme("dark");
 
     expect(light.surface).toBe("#fcfcfb");
-    expect(dark.surface).toBe("#1a1a19");
+    expect(dark.surface).toBe("#131722");
     expect(light.text).not.toBe(dark.text);
-    expect(light.up).toBe("#d84949");
-    expect(dark.down).toBe("#008300");
+    expect(light.up).toBe("#f23645");
+    expect(dark.down).toBe("#089981");
   });
 });

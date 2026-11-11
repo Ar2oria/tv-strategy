@@ -132,7 +132,20 @@ describe("typed endpoints", () => {
     mockSuccess({ ...settingsPayload, revision: 5 });
     const updated = await putSettings(update);
 
-    expect(fetched.data).toEqual(settingsPayload);
+    expect(fetched.data.markets.a_share).toEqual({
+      provider: "akshare",
+      request_timeout_seconds: 20,
+    });
+    for (const market of Object.values(fetched.data.markets)) {
+      expect(market).not.toHaveProperty("history_years");
+      expect(market).not.toHaveProperty("overlap_days");
+      expect(market).not.toHaveProperty("concurrency");
+      expect(market).not.toHaveProperty("max_retries");
+      expect(market).not.toHaveProperty("symbols");
+    }
+    expect(fetched.data.tasks["market.sync_crypto_daily"].params.spot_pairs).toEqual([
+      { exchange: "binance", symbol: "BTC/USDT" },
+    ]);
     expect(updated.data.revision).toBe(5);
     expect(fetchMock.mock.calls[0]?.[0]).toBe("/api/v1/settings");
     const [, init] = fetchMock.mock.calls[1] ?? [];

@@ -58,12 +58,24 @@ timezone, indicator, and Task changes made through the API are hot-applied with
 optimistic revision checks. Prefer the API while the server is running; edit the
 JSON directly only while stopped, then restart. A stale revision returns 409,
 and a failed post-persistence listener rolls back the file and runtime state.
-Every `markets.*.concurrency` value is the literal `1`: this MVP intentionally
-performs sequential downloads and does not accept unsupported parallelism.
-The Hong Kong Yahoo fallback is canonically named `yfinance`, matching its bar
-source metadata. Crypto settings accept only exact uppercase `BASE/QUOTE`
-spot pairs; lowercase, derivative, malformed, or whitespace-padded entries are
-rejected before the JSON is saved.
+Each market retains only `provider` and `request_timeout_seconds` (greater
+than 0 and at most 300 seconds), both editable through the data-source settings
+page. Market settings contain no crypto pairs. The Hong Kong Yahoo fallback is
+canonically named `yfinance`, matching its bar source metadata. Crypto Task
+`spot_pairs` accept only exact uppercase `BASE/QUOTE` spot pairs; lowercase,
+derivative, malformed, or whitespace-padded entries are rejected before the
+JSON is saved.
+
+On read, a legacy market's `history_years`, `overlap_days`, and `concurrency`
+are copied into its corresponding daily Task only when that Task does not
+already define the parameter. Legacy `markets.crypto.symbols` is validated and
+migrated to `market.sync_crypto_daily.params.spot_pairs`; an existing Task
+`spot_pairs` key, including an explicit empty array, takes precedence. If a
+legacy document has no `tasks` section, the required daily Task entries are
+created during migration. Existing Task values take precedence; `max_retries`
+is discarded and never migrated. This compatibility migration returns a new
+validated document without changing `schema_version` or the stored revision.
+New writes contain only the current schema.
 
 Useful endpoints are:
 
@@ -75,9 +87,10 @@ GET /api/v1/tasks/{task_name}/config
 PUT /api/v1/tasks/{task_name}/config         # expected_revision + changes
 ```
 
-All built-in Tasks ship with `enabled: false`, `cron: "0 0 * * *"`, and empty
-parameters. Disabling prevents scheduled execution; it does **not** prevent an
-explicit manual run.
+All built-in Tasks ship disabled with `cron: "0 0 * * *"`. Parameters otherwise
+use the defaults below; the crypto daily Task starts with the same default
+BTC/ETH `spot_pairs` that older versions kept in market settings. Disabling
+prevents scheduled execution; it does **not** prevent an explicit manual run.
 
 | Task | Default selection or behavior |
 | --- | --- |
@@ -85,15 +98,25 @@ explicit manual run.
 | `market.sync_a_daily` | Members of `csi300`, `star_market`, and `chinext` already stored locally |
 | `market.sync_hk_daily` | Members of `hstech` already stored locally |
 | `market.sync_us_daily` | Members of `nasdaq100` and `soxx` already stored locally |
-| `market.sync_crypto_daily` | Structured crypto entries in `markets.crypto.symbols` |
+| `market.sync_crypto_daily` | Structured entries in its own `spot_pairs` parameter |
 | `system.purge_task_history` | Delete runs and cascading logs older than `retention_days` (default 30) |
 
 Universe snapshots also add their related index/ETF instrument to the catalog;
 related instruments are not universe members. Daily stock Tasks accept
-`universe_codes`, `symbols`, and `full_refresh`. Crypto accepts the same fields,
-with canonical exchange-qualified symbols. Universe sync accepts only
-`universe_codes`. Explicit missing or inactive symbols and unknown daily
-universe codes remain visible as failed items: mixed selections finish as
+`universe_codes`, `symbols`, `full_refresh`, `history_years`, `overlap_days`,
+`concurrency`, and `adjustment`. Crypto accepts the same fields, with canonical
+exchange-qualified symbols. Stock history defaults to 10 years; crypto defaults
+to all available history (`history_years: null`). Overlap defaults to 45 days,
+concurrency to 1 (bounded to 1–8), and adjustment to `auto` (`qfq` for ordinary
+stocks, `none` for indices and crypto spot). Explicit `qfq` and `none` are also
+supported. These are per-Task parameters, not market settings. Crypto also
+accepts structured `spot_pairs`. With no explicit `symbols`, all Task
+`spot_pairs` are registered and selected. With explicit `symbols`, only those
+canonical IDs are selected; if `spot_pairs` is empty, they must already exist
+as active local instruments. No market-level fallback is read. Empty
+`spot_pairs` plus empty `symbols` fails before any Provider call. Universe sync
+accepts only `universe_codes`. Explicit missing or inactive symbols and unknown
+daily universe codes remain visible as failed items: mixed selections finish as
 `partial`, and wholly unresolved selections finish as `failed` before provider
 access. A default selection with no stored active instruments also fails.
 
@@ -106,12 +129,13 @@ instrument through the real API.
 ### 3.1 Limit the first real Task trial
 
 A one-symbol Task is a small **instrument** sample, not a bounded-date request.
-On a new instrument, stocks download `history_years` (10 by default), and crypto
-downloads from the earliest available day because its default is `null`. For a
-smaller initial trial, stop the server and temporarily set the selected market's
-`history_years` to `1`; optionally configure only one crypto symbol. Restart
-before running the trial. Record the original values so they can be restored for
-production.
+On a new instrument, stocks download the Task's `history_years` (10 by default),
+and crypto downloads from the earliest available day because its default is
+`null`. For a smaller initial trial, set `history_years: 1` in that daily Task's
+configuration or manual-run `params`; optionally configure only one crypto
+`spot_pairs` entry in that Task. Persisted Task changes use optimistic revision checks, while run
+parameters apply only to that run. Record the original values so they can be
+restored for production.
 
 Run one current-universe refresh, for example:
 
@@ -150,7 +174,7 @@ that instrument:
 curl -sS -X POST \
   http://127.0.0.1:8000/api/v1/tasks/market.sync_us_daily/runs \
   -H 'Content-Type: application/json' \
-  -d '{"params":{"symbols":["AAPL"]}}'
+  -d '{"params":{"symbols":["AAPL"],"history_years":1}}'
 ```
 
 Equivalent one-instrument selections are:
@@ -160,15 +184,17 @@ Equivalent one-instrument selections are:
 | A-share | Refresh a universe containing the stock | `600519.SH`, if present |
 | Hong Kong | Refresh `hstech` | `0700.HK`, if present; HSTECH uses four digits |
 | US | Refresh `nasdaq100` | `AAPL`, if present |
-| Crypto | Configure the Binance pair | `BINANCE:BTC/USDT` |
+| Crypto | Configure the Binance pair in the crypto Task's `spot_pairs` | `BINANCE:BTC/USDT` |
 
 Use the exact symbol returned by `/instruments`; a symbol absent from the local
-catalog is not downloaded implicitly for stocks. Crypto Tasks first upsert the
-structured configured pairs, then select only the requested canonical symbol.
+catalog is not downloaded implicitly for stocks. Crypto Tasks first upsert only
+their own structured `spot_pairs`, then select only the requested canonical
+symbol.
 
 ### 3.2 Promote to a full sync deliberately
 
-1. Restore the desired production providers, `history_years`, and crypto pairs.
+1. Restore the desired production providers, per-Task `history_years`, and
+   crypto Task `spot_pairs`.
 2. If the trial used a shorter history, run the sampled instrument again with
    `"full_refresh": true`; an ordinary incremental run does not backfill the
    years omitted by the trial.
@@ -186,7 +212,9 @@ hidden APIs, or ignore regional terms.
 
 ## 4. Replacement, resume, and partial-run semantics
 
-- Stocks and ETFs use `qfq`; indices and crypto spot use `none`.
+- With the default `adjustment: "auto"`, ordinary stocks and ETFs use `qfq`;
+  indices and crypto spot use `none`. A Task can explicitly select `qfq` or
+  `none` instead.
 - An initial load, explicit full refresh, or source/adjustment change requires a
   complete non-empty response. The response is normalized and validated before
   one transaction replaces that instrument's entire series.
@@ -214,16 +242,18 @@ hidden APIs, or ignore regional terms.
 - Starting the same Task while it is active creates a durable `skipped` overlap
   run rather than a second concurrent execution.
 
-Retries are bounded by `max_retries` and apply only to retryable provider
-availability/rate-limit errors. Invalid provider schemas fail without retry.
-The normal delay is bounded exponential backoff. Valid numeric upstream
-`Retry-After` guidance is honored with `max(backoff, retry_after)`; a longer
-upstream wait is not clamped to 30 seconds. Native HTTP, CCXT, and Yahoo
-requests receive the market's timeout snapshot. SDKs without a common native
-timeout use a cooperative `asyncio.wait_for` bound around their worker call;
-this cannot force socket cancellation, and a timed-out late result is never
-written. Current daily Task loops process their selected instruments
-sequentially.
+Every provider fetch is a single attempt: availability, rate-limit, timeout,
+and schema failures are surfaced as real errors without an automatic retry.
+`Retry-After` metadata may remain in diagnostics but never schedules another
+request. Native HTTP, CCXT, and Yahoo requests receive the market's editable
+timeout snapshot. SDKs without a common native timeout use a cooperative
+`asyncio.wait_for` bound around their worker call; this cannot force socket
+cancellation, and a timed-out late result is never written. Each daily Task
+uses its own `concurrency` parameter and an `asyncio.Semaphore`; downloads are
+bounded to 1–8 concurrent instruments, each instrument retains an independent
+transaction, and final per-instrument results are aggregated in the original
+selection order. Parent cancellation or a logging/progress failure cancels and
+awaits all remaining symbol children before the run's overlap guard is released.
 
 ## 5. Standard Cron operation
 
@@ -289,7 +319,7 @@ history. Stop the single process to stop all scheduling.
   real zero. For crypto, volume is the base-asset quantity
   (for example BTC in `BTC/USDT`), not an equity share count. Do not compare the
   units as though they were identical across asset classes.
-- **Crypto IDs are exchange-qualified:** configuration uses
+- **Crypto IDs are exchange-qualified:** Task `spot_pairs` uses
   `{"exchange":"binance","symbol":"BTC/USDT"}` or the OKX equivalent.
   Canonical IDs are `BINANCE:BTC/USDT` and `OKX:BTC/USDT`. The same pair on two
   exchanges has distinct instrument IDs and bar series; always use the
