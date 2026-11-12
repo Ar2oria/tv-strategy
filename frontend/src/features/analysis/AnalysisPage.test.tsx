@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEventBase from "@testing-library/user-event";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,28 +12,37 @@ import {
 } from "../../test/apiFixtures";
 import { routes } from "../../router";
 
+let triggerNearLeftEdge: (() => void) | undefined;
+
 vi.mock("../../charts/FinancialChart", () => ({
   FinancialChart: ({
     bars,
     computations,
     toolbar,
     stateContent,
+    loadingContent,
+    onNearLeftEdge,
     renderIndicatorLegend,
   }: {
     bars: unknown[];
     computations: Array<{ instance_id: string; error: string | null }>;
     toolbar?: React.ReactNode;
     stateContent?: React.ReactNode;
+    loadingContent?: React.ReactNode;
+    onNearLeftEdge?: () => void;
     renderIndicatorLegend?: (context: {
       hovered: null;
       latestBar: null;
       activeTime: string | null;
     }) => React.ReactNode;
-  }) => (
-    <div data-testid="financial-chart">
-      {toolbar}
-      {stateContent}
-      <span>{bars.length} bars</span>
+  }) => {
+    triggerNearLeftEdge = onNearLeftEdge;
+    return (
+      <div data-testid="financial-chart">
+        {toolbar}
+        {stateContent}
+        <span>{loadingContent}</span>
+        <span>{bars.length} bars</span>
       {computations.map((item) => (
         <span key={item.instance_id}>
           {item.error === null ? "" : item.error}
@@ -47,7 +56,8 @@ vi.mock("../../charts/FinancialChart", () => ({
             activeTime: null,
           })}
     </div>
-  ),
+    );
+  },
 }));
 
 interface Recorded {
@@ -76,6 +86,7 @@ const BARS = [
   { ...barPayload, time: "2026-01-06", open: 11, close: 12, high: 12.5, low: 10.5 },
   { ...barPayload, time: "2026-01-07", open: 12, close: 13, high: 13.5, low: 11.5 },
 ];
+let responseBars = BARS;
 
 const DONCHIAN = {
   ...indicatorDescriptorPayload,
@@ -114,7 +125,7 @@ function respond(request: Recorded): Response {
     return success([DONCHIAN, RSI]);
   }
   if (url.pathname.endsWith("/bars")) {
-    return success(BARS);
+    return success(responseBars);
   }
   if (url.pathname.endsWith("/indicators/compute")) {
     const body = request.body as {
@@ -136,6 +147,8 @@ function respond(request: Recorded): Response {
 beforeEach(() => {
   requests.length = 0;
   computations.clear();
+  responseBars = BARS;
+  triggerNearLeftEdge = undefined;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -248,6 +261,43 @@ describe("AnalysisPage", { timeout: 20000 }, () => {
     expect(
       await screen.findByTestId("financial-chart"),
     ).toBeInTheDocument();
+  });
+
+  it("shows older-history loading inside the chart without an external alert", async () => {
+    responseBars = Array.from({ length: 1000 }, (_, index) => ({
+      ...barPayload,
+      time: new Date(Date.UTC(2025, 0, index + 1)).toISOString().slice(0, 10),
+    }));
+    let release: (() => void) | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request: Recorded = {
+          url: String(input),
+          method: init?.method ?? "GET",
+          body: init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+        };
+        requests.push(request);
+        if (request.url.includes("end=")) {
+          return new Promise<Response>((resolve) => {
+            release = () => resolve(success(responseBars));
+          });
+        }
+        return respond(request);
+      }),
+    );
+    renderApp();
+    await selectInstrument();
+    const chart = await screen.findByTestId("financial-chart");
+    await waitFor(() => expect(triggerNearLeftEdge).toBeTypeOf("function"));
+
+    act(() => triggerNearLeftEdge?.());
+    expect(await within(chart).findByText("正在加载历史数据")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    act(() => release?.());
+    await waitFor(() =>
+      expect(screen.queryByText("正在加载历史数据")).not.toBeInTheDocument(),
+    );
   });
 
   it("requests the latest 1000 daily bars without a date range", async () => {

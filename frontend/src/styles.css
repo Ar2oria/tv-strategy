@@ -19,6 +19,10 @@ body > #root {
   background: #0d1117;
 }
 
+.app-content-analysis {
+  padding-top: 0;
+}
+
 .app-content .ant-space,
 .app-content .ant-space-item,
 .app-content .ant-card {
@@ -32,6 +36,10 @@ body > #root {
 @media (max-width: 575px) {
   .app-content {
     padding: 8px;
+  }
+
+  .app-content-analysis {
+    padding-top: 0;
   }
 }
 

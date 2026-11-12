@@ -148,40 +148,69 @@ test.describe("chart analysis journey", () => {
     });
   });
 
-  test("keeps candles uncovered during older-history loading", async ({ page }) => {
+  test("keeps chart geometry stable during older-history loading", async ({
+    page,
+  }) => {
     const state = createState();
     await installApiRoutes(page, state);
+    const bars = Array.from({ length: 1000 }, (_, index) => ({
+      time: new Date(Date.UTC(2020, 0, index + 1)).toISOString().slice(0, 10),
+      open: 10,
+      high: 12,
+      low: 9,
+      close: 11,
+      volume: 1000,
+      source: "yfinance",
+      adjustment: "qfq",
+    }));
     await page.route("**/api/v1/bars?**", async (route) => {
       const url = new URL(route.request().url());
       if (url.searchParams.has("end")) {
         await new Promise((resolve) => setTimeout(resolve, 300));
       }
-      await route.fallback();
+      await route.fulfill({
+        json: { success: true, data: bars, error: null, meta: { count: bars.length } },
+      });
     });
     await page.goto("/analysis");
     await page.getByRole("combobox", { name: "股票搜索" }).fill("AAA");
     await page.getByText("AAA · Alpha Corp").click();
     const chart = page.getByTestId("financial-chart");
     await expect(chart).toBeVisible();
+    await expect.poll(() => page.locator("canvas").count()).toBeGreaterThan(0);
     const before = await chart.boundingBox();
     expect(before).not.toBeNull();
-    const olderRequest = page.waitForRequest(
-      (request) => new URL(request.url()).searchParams.has("end"),
-    );
     const plot = page.getByTestId("financial-chart-plot");
     const plotBox = await plot.boundingBox();
     expect(plotBox).not.toBeNull();
     if (plotBox !== null) {
-      await olderRequest;
       await page.mouse.move(
         plotBox.x + plotBox.width / 2,
         plotBox.y + plotBox.height / 2,
       );
-      await page.mouse.wheel(0, 500);
+      await page.mouse.wheel(0, -1000);
+    }
+    const olderRequest = page.waitForRequest(
+      (request) => new URL(request.url()).searchParams.has("end"),
+    );
+    if (plotBox !== null) {
+      for (let index = 0; index < 20; index += 1) {
+        await page.mouse.move(
+          plotBox.x + plotBox.width / 2,
+          plotBox.y + plotBox.height / 2,
+        );
+        await page.mouse.down();
+        await page.mouse.move(
+          plotBox.x + plotBox.width - 10,
+          plotBox.y + plotBox.height / 2,
+          { steps: 5 },
+        );
+        await page.mouse.up();
+      }
+      await olderRequest;
     }
     const loading = page.getByTestId("financial-chart-loading");
     await expect(loading).toBeVisible();
-    await expect(loading).toHaveCSS("position", "relative");
     const during = await chart.boundingBox();
     expect(during).not.toBeNull();
     expect({ height: during?.height, y: during?.y }).toEqual({
@@ -195,6 +224,21 @@ test.describe("chart analysis journey", () => {
       height: before?.height,
       y: before?.y,
     });
+  });
+
+  test("starts chart directly below the workspace tabs", async ({ page }) => {
+    const state = createState();
+    await installApiRoutes(page, state);
+    await page.goto("/analysis");
+    const chart = page.getByTestId("financial-chart");
+    await expect(chart).toBeVisible();
+    const tabsBottom = await page.getByRole("tablist").evaluate(
+      (element) => element.getBoundingClientRect().bottom,
+    );
+    const chartTop = await chart.evaluate(
+      (element) => element.getBoundingClientRect().top,
+    );
+    expect(chartTop).toBe(tabsBottom);
   });
 
   test("shows empty-database guidance instead of a blank chart", async ({

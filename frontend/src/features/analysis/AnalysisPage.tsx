@@ -305,9 +305,6 @@ export function AnalysisPage() {
           description={pagingError}
         />
       )}
-      {/* Reserved height keeps the chart from jumping when the hint
-          disappears after the first indicator is added. */}
-      <div style={{ minHeight: 22 }} />
       <Suspense fallback={<Spin />}>
         <FinancialChart
           bars={loadedBars}

@@ -107,7 +107,13 @@ export function AppShell() {
         />
       </Layout.Sider>
       <Layout style={{ minWidth: 0, background: "#0d1117" }}>
-        <Layout.Content className="app-content">
+        <Layout.Content
+          className={
+            location.pathname === "/analysis"
+              ? "app-content app-content-analysis"
+              : "app-content"
+          }
+        >
           {renderRedirect ? <Outlet /> : (
             <>
               <WorkspaceTabsBar {...workspace} />

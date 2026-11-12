@@ -106,6 +106,17 @@ test("tab appearance uses connected dark tabs", async ({ page }) => {
   await expect(page.getByRole("button", { name: "关闭 Task 管理" })).toBeVisible();
 });
 
+test("keeps non-analysis content top spacing", async ({ page }) => {
+  const state = createState();
+  await installApiRoutes(page, state);
+  await page.goto("/tasks");
+  await expect(page.locator(".app-content")).toHaveCSS("padding-top", "16px");
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(page.locator(".app-content")).toHaveCSS("padding-top", "8px");
+  await page.getByRole("link", { name: "图表分析" }).click();
+  await expect(page.locator(".app-content")).toHaveCSS("padding-top", "0px");
+});
+
 test("settings menu collapses and expands", async ({ page }) => {
   const state = createState();
   await installApiRoutes(page, state);

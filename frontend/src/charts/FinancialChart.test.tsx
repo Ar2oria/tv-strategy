@@ -771,6 +771,28 @@ describe("FinancialChart", () => {
     expect(screen.queryByText(/不存在于返回的 K 线/)).not.toBeInTheDocument();
   });
 
+  it("shows loading content in a fixed information band instead of an overlay", () => {
+    render(
+      <FinancialChart
+        bars={BARS}
+        computations={[]}
+        loadingContent={<span>正在加载历史数据</span>}
+      />,
+    );
+
+    const loading = screen.getByTestId("financial-chart-loading");
+    expect(loading).toHaveStyle({
+      position: "relative",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      height: "48px",
+      pointerEvents: "none",
+    });
+    expect(screen.getByTestId("financial-chart-info")).toContainElement(loading);
+    expect(screen.queryByTestId("chart-header")).not.toBeInTheDocument();
+  });
+
   it("adds only secondary pane heights to the canvas", () => {
     const { rerender } = render(<FinancialChart bars={BARS} computations={[]} />);
     const canvas = () => screen.getByTestId("financial-chart-canvas");
