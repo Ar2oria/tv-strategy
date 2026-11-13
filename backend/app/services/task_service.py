@@ -3,10 +3,15 @@
 import logging
 from collections.abc import Callable
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 
 from app.config.models import Settings, TaskSettings
+from app.config.secrets import (
+    mask_sensitive_task_params,
+    restore_sensitive_task_params,
+)
 from app.config.store import (
     ConfigService,
     ConfigValidationError,
@@ -87,18 +92,23 @@ class TaskService:
         params: dict[str, JsonValue] | None = None,
     ) -> TaskView:
         descriptor = self._registry.get(task_name)
+        current = self._config.get().tasks.get(task_name, TaskSettings())
+        resolved_params = (
+            restore_sensitive_task_params(params, current.params)
+            if params is not None
+            else None
+        )
         changes = {
             key: value
             for key, value in {
                 "enabled": enabled,
                 "cron": cron,
-                "params": params,
+                "params": resolved_params,
             }.items()
             if value is not None
         }
         if not changes:
             raise InvalidTaskConfigError()
-        current = self._config.get().tasks.get(task_name, TaskSettings())
         try:
             candidate = TaskSettings.model_validate(
                 {**current.model_dump(mode="python"), **changes}
@@ -142,16 +152,26 @@ class TaskService:
         self._registry.get(task_name)
         return self._runs.list_runs(task_name, limit=limit, offset=offset)
 
+    def count_runs(self, task_name: str) -> int:
+        self._registry.get(task_name)
+        return self._runs.count_runs(task_name)
+
     def logs(
         self,
         run_id: int,
         *,
         limit: int = DEFAULT_LOG_LIMIT,
         offset: int = 0,
+        order: Literal["asc", "desc"] = "desc",
     ) -> list[TaskLogDTO]:
         if self._runs.get_run(run_id) is None:
             raise TaskRunNotFoundError(f"Task run {run_id} does not exist")
-        return self._runs.list_logs(run_id, limit=limit, offset=offset)
+        return self._runs.list_logs(run_id, limit=limit, offset=offset, order=order)
+
+    def count_logs(self, run_id: int) -> int:
+        if self._runs.get_run(run_id) is None:
+            raise TaskRunNotFoundError(f"Task run {run_id} does not exist")
+        return self._runs.count_logs(run_id)
 
     def validate_settings(self, settings: Settings) -> None:
         """ConfigService validator hook; performs no runtime job mutations."""
@@ -175,7 +195,7 @@ class TaskService:
             description=descriptor.description,
             enabled=task_settings.enabled,
             cron=task_settings.cron,
-            params=task_settings.params,
+            params=mask_sensitive_task_params(task_settings.params),
             params_schema=descriptor.params_schema,
             revision=settings.revision,
             next_run_at=next_run,

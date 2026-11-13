@@ -288,7 +288,14 @@ def test_ccxt_receives_native_timeout_in_milliseconds(
         timeout=1.25,
     )
 
-    constructor.assert_called_once_with({"enableRateLimit": True, "timeout": 1250})
+    constructor.assert_called_once_with(
+        {
+            "enableRateLimit": True,
+            "timeout": 1250,
+            "requests_trust_env": False,
+            "options": {"fetchMarkets": ["spot"]},
+        }
+    )
 
 
 @pytest.mark.parametrize("guidance", ["65", "invalid", "nan", "-2"])

@@ -13,6 +13,7 @@ export const settingsPayload = {
     },
     hk_stock: {
       provider: "yfinance",
+      proxy_url: "socks5h://127.0.0.1:1081",
       history_years: 10,
       symbols: [],
       request_timeout_seconds: 20,

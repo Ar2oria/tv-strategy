@@ -122,6 +122,30 @@ def test_valid_update_increments_revision_once_and_persists(
     assert_temp_files_absent(config_path)
 
 
+def test_proxy_url_round_trip_preserves_revision_and_other_markets(
+    service: ConfigService,
+    config_path: Path,
+) -> None:
+    before = service.get()
+
+    def add_proxy(old: Settings) -> Settings:
+        market = old.markets["crypto"].model_copy(
+            update={"proxy_url": "socks5h://127.0.0.1:1080"}
+        )
+        return old.model_copy(
+            update={"markets": {**old.markets, "crypto": market}}
+        )
+
+    updated = service.update(before.revision, add_proxy)
+
+    assert updated.revision == before.revision + 1
+    assert updated.markets["crypto"].proxy_url == "socks5h://127.0.0.1:1080"
+    assert updated.markets["a_share"].proxy_url is None
+    persisted = json.loads(config_path.read_text(encoding="utf-8"))
+    assert persisted["markets"]["crypto"]["proxy_url"] == "socks5h://127.0.0.1:1080"
+    assert ConfigService(config_path).get() == updated
+
+
 def test_stale_revision_raises_conflict(service: ConfigService) -> None:
     before = service.get()
 

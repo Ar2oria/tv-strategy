@@ -18,6 +18,7 @@ from app.providers.akshare_ohlcv import AkshareOhlcvProvider
 from app.providers.baostock_ohlcv import BaoStockOhlcvProvider
 from app.providers.crypto_catalog import crypto_instrument
 from app.providers.errors import ProviderUnavailable
+from app.providers.hstech_api import ItigerUniverseProvider
 from app.providers.registry import ProviderRegistry
 from app.repositories.bars import BarRepository
 from app.repositories.instruments import InstrumentRepository
@@ -407,9 +408,45 @@ async def test_crypto_empty_task_directory_ignores_market_fallback(
     )
     harness = make_context(session_factory, resources, settings)
 
-    with pytest.raises(ValueError, match=DEFAULT_UNIVERSE_ERROR):
-        await CryptoDailySyncTask().run(harness.context, CryptoDailySyncParams())
+    result = await CryptoDailySyncTask().run(
+        harness.context, CryptoDailySyncParams()
+    )
 
+    assert result.status == "failed"
+    assert result.progress == 100
+    assert result.error is not None
+    assert "Configure spot_pairs or symbols" in result.error
+    logs = harness.runs.list_logs(harness.context.run_id)
+    assert [log.level for log in logs] == ["ERROR"]
+    assert logs[0].context["error_type"] == "EmptyInstrumentSelection"
+    assert sync.calls == []
+
+
+@pytest.mark.anyio
+async def test_empty_default_us_catalog_returns_actionable_failure_and_log(
+    session_factory: SessionFactory,
+) -> None:
+    settings = settings_with("us_stock", market_config())
+    sync = RecordingSync()
+    resources = RuntimeResources(
+        instrument_repository=InstrumentRepository(session_factory),
+        bar_repository=BarRepository(session_factory),
+        provider_registry=ProviderRegistry(settings=settings),
+        bar_sync_service=sync,  # type: ignore[arg-type]
+    )
+    harness = make_context(session_factory, resources, settings)
+
+    result = await USStockDailySyncTask().run(harness.context, DailySyncParams())
+
+    assert result.status == "failed"
+    assert result.progress == 100
+    assert result.error is not None
+    assert DEFAULT_UNIVERSE_ERROR in result.error
+    assert "Run Synchronize market universes first" in result.error
+    logs = harness.runs.list_logs(harness.context.run_id)
+    assert [log.level for log in logs] == ["ERROR"]
+    assert logs[0].context["error_type"] == "EmptyInstrumentSelection"
+    assert "Run Synchronize market universes first" in logs[0].context["detail"]
     assert sync.calls == []
 
 
@@ -520,6 +557,47 @@ async def test_universe_task_is_partial_and_preserves_failed_universe(
     assert [item.symbol for item in instruments.list_members("csi300")] == ["OLD"]
     assert [item.symbol for item in instruments.list_members("soxx")] == ["NEW"]
     assert "secret" not in str(harness.runs.list_logs(harness.context.run_id))
+
+
+@pytest.mark.anyio
+async def test_hstech_task_uses_token_override_without_logging_it(
+    monkeypatch: pytest.MonkeyPatch,
+    session_factory: SessionFactory,
+) -> None:
+    settings = default_settings()
+    token = "override-secret-token"
+    expected = UniverseSnapshot(
+        universe_code="hstech",
+        source="itiger",
+        effective_date=None,
+        members=(instrument_dto("0700.HK"),),
+    )
+    calls: list[str] = []
+
+    def fake_fetch(**kwargs: object) -> UniverseSnapshot:
+        calls.append(str(kwargs["bearer_token"]))
+        return expected
+
+    monkeypatch.setattr("app.providers.hstech_api.fetch_hstech_api_snapshot", fake_fetch)
+    registry = ProviderRegistry(
+        settings=settings,
+        universe_providers={"hstech": ItigerUniverseProvider(bearer_token="initial-token")},
+    )
+    resources = RuntimeResources(
+        instrument_repository=InstrumentRepository(session_factory),
+        bar_repository=BarRepository(session_factory),
+        provider_registry=registry,
+    )
+    harness = make_context(session_factory, resources, settings)
+
+    result = await SyncUniversesTask().run(
+        harness.context,
+        UniverseSyncParams(universe_codes=("hstech",), itiger_token=token),
+    )
+
+    assert result.status == "success"
+    assert calls == [token]
+    assert token not in str(harness.runs.list_logs(harness.context.run_id))
 
 
 def test_market_tasks_have_unique_registered_names() -> None:

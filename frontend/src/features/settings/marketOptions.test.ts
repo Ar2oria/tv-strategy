@@ -10,6 +10,7 @@ import {
 const market: MarketSettings = {
   provider: "yfinance",
   request_timeout_seconds: 20,
+  proxy_url: null,
 };
 
 describe("market options", () => {

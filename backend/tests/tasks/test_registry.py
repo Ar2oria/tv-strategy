@@ -139,6 +139,14 @@ def test_only_crypto_daily_descriptor_exposes_structured_spot_pairs() -> None:
         assert "spot_pairs" not in registry.get(task_name).params_schema["properties"]
 
 
+def test_universe_descriptor_exposes_itiger_token_parameter() -> None:
+    descriptor = discover_tasks().get("market.sync_universes")
+
+    token = descriptor.params_schema["properties"]["itiger_token"]
+    assert token["type"] == "string"
+    assert token["default"] == ""
+
+
 def test_task_result_is_frozen_and_rejects_non_terminal_states() -> None:
     result = TaskResult(status="partial", progress=40, error="one item failed")
 

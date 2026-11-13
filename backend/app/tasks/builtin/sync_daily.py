@@ -30,6 +30,10 @@ DEFAULT_MARKET_UNIVERSES: dict[str, tuple[str, ...]] = {
     "crypto": (),
 }
 DEFAULT_UNIVERSE_ERROR = "No instruments selected for daily market synchronization"
+EMPTY_CRYPTO_DIRECTORY_ERROR = (
+    "No crypto instruments selected for daily synchronization. "
+    "Configure spot_pairs or symbols first"
+)
 FAILURE_LOG_MESSAGE = "Instrument synchronization failed"
 SUCCESS_LOG_MESSAGE = "Instrument synchronization succeeded"
 
@@ -87,7 +91,7 @@ async def run_daily_sync(
         configured_crypto,
     )
     if not selected and not unresolved:
-        raise ValueError(DEFAULT_UNIVERSE_ERROR)
+        return _empty_selection_result(context, market)
 
     failures = list(unresolved)
     for failure in unresolved:
@@ -133,6 +137,36 @@ async def run_daily_sync(
         status=status,
         details=details,
         error=_result_error(status, failed, total),
+    )
+
+
+def _empty_selection_result(context: TaskContext, market: Market) -> TaskResult:
+    error = (
+        EMPTY_CRYPTO_DIRECTORY_ERROR
+        if market == "crypto"
+        else f"{DEFAULT_UNIVERSE_ERROR}. Run Synchronize market universes first"
+    )
+    context.log(
+        "ERROR",
+        error,
+        run_id=context.run_id,
+        error_type="EmptyInstrumentSelection",
+        detail=error,
+    )
+    context.report_progress(100)
+    return TaskResult(
+        status="failed",
+        progress=100,
+        error=error,
+        details={
+            "total": 0,
+            "succeeded": 0,
+            "failed": 0,
+            "current": 0,
+            "current_symbol": None,
+            "bar_count": 0,
+            "failures": [],
+        },
     )
 
 

@@ -16,6 +16,7 @@ from app.providers.errors import (
     ProviderUnavailable,
 )
 from app.providers.ohlcv_normalization import normalize_date, records_from_frame
+from app.providers.sdk_runtime import provider_runtime
 from app.providers.timeouts import (
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
     validate_request_timeout,
@@ -63,34 +64,58 @@ class AkshareUniverseProvider:
         self,
         *,
         request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        proxy_url: str | None = None,
     ) -> None:
         self._request_timeout_seconds = validate_request_timeout(
             request_timeout_seconds
         )
+        self._proxy_url = proxy_url
 
     @property
     def request_timeout_seconds(self) -> float:
         return self._request_timeout_seconds
 
+    @property
+    def proxy_url(self) -> str | None:
+        return self._proxy_url
+
     def fetch_universe(self, universe_code: str) -> UniverseSnapshot:
         if universe_code == "csi300":
-            frame = _request("index_stock_cons_csindex", symbol=CSI300_CODE)
+            frame = _request(
+                "index_stock_cons_csindex",
+                proxy_url=self._proxy_url,
+                symbol=CSI300_CODE,
+            )
             return _csi300_snapshot(frame)
         if universe_code == "star_market":
-            frame = _request("stock_info_sh_name_code", symbol="科创板")
+            frame = _request(
+                "stock_info_sh_name_code",
+                proxy_url=self._proxy_url,
+                symbol="科创板",
+            )
             return _board_snapshot(frame, universe_code)
         if universe_code == "chinext":
-            frame = _request("stock_info_sz_name_code", symbol="A股列表")
+            frame = _request(
+                "stock_info_sz_name_code",
+                proxy_url=self._proxy_url,
+                symbol="A股列表",
+            )
             return _board_snapshot(frame, universe_code)
         raise ProviderCompatibilityError(
             "AKShare universe provider supports csi300, star_market, and chinext only"
         )
 
 
-def _request(reader_name: str, **kwargs: object) -> object:
+def _request(
+    reader_name: str,
+    *,
+    proxy_url: str | None = None,
+    **kwargs: object,
+) -> object:
     try:
         reader = getattr(ak, reader_name)
-        return reader(**kwargs)
+        with provider_runtime("akshare", proxy_url, wait=True):
+            return reader(**kwargs)
     except ProviderError:
         raise
     except Exception as error:

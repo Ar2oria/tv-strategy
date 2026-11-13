@@ -55,6 +55,7 @@ class CcxtOhlcvProvider:
         clock: Callable[..., datetime] | None = None,
         *,
         request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        proxy_url: str | None = None,
     ) -> None:
         if not isinstance(exchange_id, str) or exchange_id not in PAGE_LIMITS:
             raise ProviderConfigurationError("Unsupported CCXT exchange")
@@ -65,10 +66,15 @@ class CcxtOhlcvProvider:
         self._request_timeout_seconds = validate_request_timeout(
             request_timeout_seconds
         )
+        self._proxy_url = proxy_url
 
     @property
     def request_timeout_seconds(self) -> float:
         return self._request_timeout_seconds
+
+    @property
+    def proxy_url(self) -> str | None:
+        return self._proxy_url
 
     def fetch_daily(
         self,
@@ -123,10 +129,24 @@ class CcxtOhlcvProvider:
         timeout_ms = max(1, int(round(self._request_timeout_seconds * 1000)))
         try:
             constructor = getattr(ccxt, self._exchange_id)
-            return constructor({"enableRateLimit": True, "timeout": timeout_ms})
+            config: dict[str, object] = {
+                "enableRateLimit": True,
+                "timeout": timeout_ms,
+                "requests_trust_env": False,
+            }
+            if self._proxy_url is not None:
+                config = {
+                    **config,
+                    "proxies": {"http": self._proxy_url, "https": self._proxy_url},
+                }
+            if self._exchange_id == "binance":
+                config = {**config, "options": {"fetchMarkets": ["spot"]}}
+            return constructor(config)
         except Exception as error:
             logger.warning("CCXT %s construction failed", self._exchange_id)
-            raise _provider_failure(error) from error
+            raise _provider_failure(
+                error, exchange_id=self._exchange_id, operation="exchange construction"
+            ) from error
 
     def _download(
         self,
@@ -220,15 +240,23 @@ class CcxtOhlcvProvider:
             )
         except Exception as error:
             logger.warning("CCXT %s OHLCV request failed", self._exchange_id)
-            raise _provider_failure(error) from error
+            raise _provider_failure(
+                error, exchange_id=self._exchange_id, operation="OHLCV request"
+            ) from error
 
     def _close_exchange(self, exchange: object, failure_active: bool) -> None:
         try:
-            exchange.close()  # type: ignore[attr-defined]
+            close = getattr(exchange, "close", None)
+            if callable(close):
+                close()
+            else:
+                exchange.session.close()  # type: ignore[attr-defined]
         except Exception as error:
             logger.warning("CCXT %s close failed", self._exchange_id)
             if not failure_active:
-                raise _provider_failure(error) from error
+                raise _provider_failure(
+                    error, exchange_id=self._exchange_id, operation="exchange cleanup"
+                ) from error
 
 
 def _missing_subintervals(
@@ -332,11 +360,14 @@ def _current_utc_day(clock: Callable[..., datetime]) -> date:
         raise ProviderDataInvalid("CCXT clock must return an aware datetime") from error
 
 
-def _provider_failure(error: Exception) -> ProviderError:
+def _provider_failure(
+    error: Exception, *, exchange_id: ExchangeId, operation: str
+) -> ProviderError:
     retry_after = retry_after_from_error(error)
+    detail = f"CCXT {exchange_id} {operation} failed ({type(error).__name__})"
     if _is_rate_limited(error):
-        return ProviderRateLimited(retry_after=retry_after)
-    return ProviderUnavailable(retry_after=retry_after)
+        return ProviderRateLimited(detail=detail, retry_after=retry_after)
+    return ProviderUnavailable(detail=detail, retry_after=retry_after)
 
 
 def _is_rate_limited(error: Exception) -> bool:

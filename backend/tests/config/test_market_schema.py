@@ -10,6 +10,7 @@ from app.config.models import (
     Settings,
     TaskSettings,
 )
+from app.providers.registry import ProviderRegistry
 
 CLEANUP_TASK = "system.purge_task_history"
 STOCK_MARKETS = ("a_share", "hk_stock", "us_stock")
@@ -48,6 +49,7 @@ def test_default_markets_and_request_strategies_match_contract() -> None:
     for market in settings.markets.values():
         assert "symbols" not in market.model_fields_set
         assert market.request_timeout_seconds == 20
+        assert market.proxy_url is None
     assert settings.tasks["market.sync_crypto_daily"].params["spot_pairs"] == [
         {"exchange": "binance", "symbol": "BTC/USDT"},
         {"exchange": "binance", "symbol": "ETH/USDT"},
@@ -79,6 +81,70 @@ def test_market_strategy_defaults_and_valid_upper_bounds() -> None:
     assert "symbols" not in MarketSettings.model_fields
     assert defaults.request_timeout_seconds == 20
     assert bounded.request_timeout_seconds == 300
+
+
+@pytest.mark.parametrize(
+    "proxy_url",
+    [
+        "http://127.0.0.1:8080",
+        "https://proxy.example:8443",
+        "socks5://127.0.0.1:1080",
+        "socks5h://127.0.0.1:1080",
+    ],
+)
+def test_market_proxy_accepts_supported_unauthenticated_urls(proxy_url: str) -> None:
+    market = MarketSettings(provider="akshare", proxy_url=f"  {proxy_url}  ")
+
+    assert market.proxy_url == proxy_url
+
+
+def test_blank_market_proxy_normalizes_to_direct_access() -> None:
+    assert MarketSettings(provider="akshare", proxy_url="   ").proxy_url is None
+
+
+@pytest.mark.parametrize(
+    "proxy_url",
+    [
+        "ftp://proxy.example:21",
+        "http://proxy.example",
+        "http:///missing-host",
+        "http://user:pass@proxy.example:8080",
+        "http://proxy.example:8080?token=secret",
+        "http://proxy.example:8080#fragment",
+        "http://proxy.example:99999",
+        "http://proxy.example:8080/\nInjected",
+    ],
+)
+def test_invalid_market_proxy_urls_are_rejected(proxy_url: str) -> None:
+    with pytest.raises(ValidationError, match="proxy"):
+        MarketSettings(provider="akshare", proxy_url=proxy_url)
+
+
+def test_baostock_cannot_be_combined_with_a_proxy() -> None:
+    with pytest.raises(ValidationError, match="BaoStock"):
+        replace_market(
+            default_settings(),
+            "a_share",
+            provider="baostock",
+            proxy_url="socks5://127.0.0.1:1080",
+        )
+
+
+def test_registry_returns_market_settings_from_the_same_immutable_snapshot() -> None:
+    settings = replace_market(
+        default_settings(),
+        "us_stock",
+        proxy_url="socks5h://127.0.0.1:1080",
+    )
+    registry = ProviderRegistry(settings=settings)
+
+    snapshot = registry.market_settings("us_stock")
+
+    assert snapshot.proxy_url == "socks5h://127.0.0.1:1080"
+    assert snapshot == settings.markets["us_stock"]
+    assert snapshot is not settings.markets["us_stock"]
+    with pytest.raises(ValidationError):
+        snapshot.proxy_url = "http://127.0.0.1:8080"
 
 
 @pytest.mark.parametrize("provider", ["", "   "])

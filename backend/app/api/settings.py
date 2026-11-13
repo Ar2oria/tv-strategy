@@ -11,6 +11,7 @@ from app.config.models import (
     Settings,
     TaskSettings,
 )
+from app.config.secrets import mask_sensitive_settings, restore_sensitive_settings
 from app.config.store import ConfigService
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -50,13 +51,14 @@ def _config(request: Request) -> ConfigService:
 
 @router.get("/settings")
 def get_settings(request: Request) -> JSONResponse:
-    return success_response(_config(request).get())
+    return success_response(mask_sensitive_settings(_config(request).get()))
 
 
 @router.put("/settings")
 def put_settings(request: Request, payload: SettingsUpdate) -> JSONResponse:
-    updated = _config(request).update(
+    config = _config(request)
+    updated = config.update(
         payload.expected_revision,
-        lambda old: payload.to_settings(),
+        lambda old: restore_sensitive_settings(payload.to_settings(), old),
     )
-    return success_response(updated)
+    return success_response(mask_sensitive_settings(updated))

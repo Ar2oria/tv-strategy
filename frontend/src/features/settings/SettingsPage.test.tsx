@@ -117,8 +117,18 @@ describe("SettingsPage", { timeout: 20000 }, () => {
     expect(screen.getByText("加密货币")).toBeInTheDocument();
     expect(screen.getByLabelText("A 股 数据源")).toBeDisabled();
     expect(screen.getByLabelText("A 股 请求超时")).toBeDisabled();
+    expect(screen.getByLabelText("A 股 代理 IP/域名")).toBeDisabled();
     expect(screen.getByLabelText("加密货币 请求超时")).toBeDisabled();
+    const primaryRow = screen.getByTestId("market-primary-row-a_share");
+    expect(primaryRow).toContainElement(screen.getByLabelText("A 股 数据源"));
+    expect(primaryRow).toContainElement(screen.getByLabelText("A 股 请求超时"));
+    expect(primaryRow).not.toContainElement(screen.getByLabelText("A 股 代理 IP/域名"));
+    expect(screen.getByTestId("market-proxy-row-a_share")).toContainElement(
+      screen.getByLabelText("A 股 代理 IP/域名"),
+    );
     expect(screen.getAllByRole("button", { name: /^编辑 / })).toHaveLength(4);
+    expect(screen.getAllByRole("button", { name: /^网络测试 / })).toHaveLength(4);
+    expect(screen.getByRole("button", { name: "网络测试 A 股" })).toBeEnabled();
     expect(screen.queryByRole("button", { name: "保存设置" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "放弃修改" })).not.toBeInTheDocument();
     expect(screen.queryByText("历史深度（年）")).not.toBeInTheDocument();
@@ -200,6 +210,67 @@ describe("SettingsPage", { timeout: 20000 }, () => {
     expect(second.markets.a_share.request_timeout_seconds).toBe(30);
     expect(second.markets.hk_stock.request_timeout_seconds).toBe(40);
     expect(await screen.findByText("设置已保存并立即生效。")).toBeInTheDocument();
+  });
+
+  it("loads an existing proxy into separate protocol host and port controls", async () => {
+    renderSettings();
+
+    expect(await screen.findByLabelText("港股 代理 IP/域名")).toHaveValue(
+      "127.0.0.1",
+    );
+    expect(screen.getByLabelText("港股 代理端口")).toHaveValue("1081");
+    expect(screen.getByTestId("market-group-hk_stock")).toHaveTextContent("socks5h");
+    expect(screen.getByTestId("market-group-a_share")).toHaveTextContent("http");
+  });
+
+  it("saves and clears proxies while preserving other unsaved Group edits", async () => {
+    renderSettings();
+    await screen.findByText("美股");
+    await userEvent.click(screen.getByRole("button", { name: "编辑 A 股" }));
+    await userEvent.click(screen.getByLabelText("A 股 代理协议"));
+    await userEvent.click(await screen.findByTitle("socks5"));
+    await userEvent.type(
+      screen.getByLabelText("A 股 代理 IP/域名"),
+      "127.0.0.1",
+    );
+    expect(screen.getByLabelText("A 股 代理 IP/域名")).toHaveValue("127.0.0.1");
+    await userEvent.type(screen.getByLabelText("A 股 代理端口"), "1080");
+    await userEvent.click(screen.getByRole("button", { name: "编辑 港股" }));
+    await userEvent.clear(screen.getByLabelText("港股 代理 IP/域名"));
+    await userEvent.clear(screen.getByLabelText("港股 代理端口"));
+    await userEvent.click(screen.getByRole("button", { name: "保存 A 股" }));
+
+    await waitFor(() => expect(puts()).toHaveLength(1));
+    const first = puts()[0].body as {
+      markets: Record<string, { proxy_url: string | null }>;
+    };
+    expect(first.markets.a_share.proxy_url).toBe("socks5://127.0.0.1:1080");
+    expect(first.markets.hk_stock.proxy_url).toBe("socks5h://127.0.0.1:1081");
+
+    await userEvent.click(screen.getByRole("button", { name: "保存 港股" }));
+    await waitFor(() => expect(puts()).toHaveLength(2));
+    const second = puts()[1].body as {
+      markets: Record<string, { proxy_url: string | null }>;
+    };
+    expect(second.markets.a_share.proxy_url).toBe("socks5://127.0.0.1:1080");
+    expect(second.markets.hk_stock.proxy_url).toBeNull();
+  });
+
+  it("disables network testing while editing and warns about BaoStock proxies", async () => {
+    renderSettings();
+    await screen.findByText("美股");
+    await userEvent.click(screen.getByRole("button", { name: "编辑 A 股" }));
+    expect(screen.getByRole("button", { name: "网络测试 A 股" })).toBeDisabled();
+
+    await userEvent.type(
+      screen.getByLabelText("A 股 代理 IP/域名"),
+      "127.0.0.1",
+    );
+    await userEvent.type(screen.getByLabelText("A 股 代理端口"), "1080");
+    await userEvent.click(screen.getByLabelText("A 股 数据源"));
+    await userEvent.click(await screen.findByTitle("baostock"));
+
+    expect(screen.getByText("BaoStock 不支持代理")).toBeInTheDocument();
   });
 
   it("reloads the newest revision on 409 and asks the user to reapply", async () => {

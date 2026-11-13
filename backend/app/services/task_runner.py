@@ -9,6 +9,7 @@ from typing import Any
 from pydantic import BaseModel, ValidationError
 
 from app.config.models import Settings, TaskSettings
+from app.config.secrets import redact_sensitive_task_params
 from app.config.store import ConfigService
 from app.db.types import utc_now
 from app.domain.dto import TaskRunDTO, TaskStatus, TriggerType
@@ -92,8 +93,11 @@ class TaskRunner:
         supplied = dict(params_override) if params_override is not None else {}
         merged = {**configured, **supplied}
         params = self._validate_params(descriptor, merged)
-        params_snapshot = params.model_dump(mode="json")
+        params_snapshot = redact_sensitive_task_params(params.model_dump(mode="json"))
         config_snapshot = task_settings.model_dump(mode="json")
+        config_snapshot["params"] = redact_sensitive_task_params(
+            config_snapshot["params"]
+        )
 
         async with self._lock:
             if task_name in self._running:
@@ -240,11 +244,11 @@ class TaskRunner:
         except asyncio.CancelledError:
             self._finish_after_error(run_id, "interrupted", TASK_INTERRUPTED_ERROR)
             raise
-        except Exception:
+        except Exception as error:
             logger.exception(
                 "Task %s execution failed for run %s", descriptor.name, run_id
             )
-            self._safe_error_log(run_id)
+            self._safe_error_log(run_id, error_type=type(error).__name__)
             self._finish_after_error(run_id, "failed", TASK_EXECUTION_ERROR)
         finally:
             async with self._lock:
@@ -266,9 +270,14 @@ class TaskRunner:
         except Exception:
             logger.exception("Unable to persist terminal state for Task run %s", run_id)
 
-    def _safe_error_log(self, run_id: int) -> None:
+    def _safe_error_log(self, run_id: int, *, error_type: str) -> None:
         try:
-            self._runs.add_log(run_id, "ERROR", TASK_EXECUTION_ERROR)
+            self._runs.add_log(
+                run_id,
+                "ERROR",
+                TASK_EXECUTION_ERROR,
+                context={"error_type": error_type},
+            )
         except Exception:
             logger.exception("Unable to persist failure log for Task run %s", run_id)
 

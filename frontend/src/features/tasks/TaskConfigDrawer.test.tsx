@@ -32,6 +32,39 @@ describe("TaskConfigDrawer", () => {
     });
   });
 
+  it("keeps the masked iTiger token when saving other task settings", () => {
+    const onSave = vi.fn();
+    const base = taskPayload as unknown as TaskDescriptor;
+    const task: TaskDescriptor = {
+      ...base,
+      name: "market.sync_universes",
+      params: { ...base.params, itiger_token: "********" },
+      params_schema: {
+        ...base.params_schema,
+        properties: {
+          ...base.params_schema.properties,
+          itiger_token: { type: "string" },
+        },
+      },
+    };
+    render(
+      <TaskConfigDrawer
+        task={task}
+        saving={false}
+        saveError={null}
+        conflict={false}
+        onSave={onSave}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText(/itiger/i)).toHaveValue("********");
+    fireEvent.click(screen.getByRole("button", { name: "保存配置" }));
+
+    expect(onSave).toHaveBeenCalledOnce();
+    expect(onSave.mock.calls[0]?.[0].params.itiger_token).toBe("********");
+  });
+
   it("uses one left-aligned column and submits edited structured spot pairs", async () => {
     const onSave = vi.fn();
     render(

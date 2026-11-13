@@ -62,6 +62,15 @@ def enable_purge_task(path: Path) -> None:
     )
 
 
+def with_itiger_token(old: Settings, token: str) -> Settings:
+    task_name = "market.sync_universes"
+    task = old.tasks[task_name]
+    updated = task.model_copy(
+        update={"params": {**task.params, "itiger_token": token}}
+    )
+    return old.model_copy(update={"tasks": {**old.tasks, task_name: updated}})
+
+
 def scheduler_snapshot(scheduler: CronScheduler) -> list[tuple[object, ...]]:
     return sorted(
         (job.id, tuple(job.args), job.trigger.run_date)
@@ -94,6 +103,7 @@ def test_get_and_put_replace_the_full_document_and_hot_apply_without_restart(
         candidate = update_payload(container.config_service.get())
         candidate["timezone"] = "Asia/Shanghai"
         candidate["markets"]["a_share"]["provider"] = "baostock"
+        candidate["markets"]["hk_stock"]["proxy_url"] = "socks5h://127.0.0.1:1080"
         candidate["indicators"]["max_active_indicators"] = 7
         updated = client.put(f"{API_ROOT}/settings", json=candidate)
 
@@ -117,9 +127,67 @@ def test_get_and_put_replace_the_full_document_and_hot_apply_without_restart(
             "Asia/Shanghai",
         )
         assert container.provider_settings["a_share"].provider == "baostock"
+        assert (
+            container.provider_settings["hk_stock"].proxy_url
+            == "socks5h://127.0.0.1:1080"
+        )
+        assert (
+            app.state.provider_registry.market_settings("hk_stock").proxy_url
+            == "socks5h://127.0.0.1:1080"
+        )
         assert container.indicator_service is app.state.indicator_service
         assert app.state.indicator_service is not original_indicator_service
         assert client.get(f"{API_ROOT}/settings").json()["data"]["revision"] == 2
+
+
+def test_full_settings_get_masks_the_persisted_itiger_token(
+    tmp_path: Path,
+) -> None:
+    settings = application_settings(tmp_path)
+    config = ConfigService(settings.config_path)
+    config.update(0, lambda old: with_itiger_token(old, "full-settings-secret"))
+    app = create_app(settings)
+
+    with TestClient(app) as client:
+        response = client.get(f"{API_ROOT}/settings")
+
+        assert response.status_code == 200
+        params = response.json()["data"]["tasks"]["market.sync_universes"]["params"]
+        assert params["itiger_token"] == "********"
+        assert "full-settings-secret" not in response.text
+        current = app.state.container.config_service.get()
+        assert current.tasks["market.sync_universes"].params["itiger_token"] == (
+            "full-settings-secret"
+        )
+
+
+def test_full_settings_update_preserves_and_masks_the_itiger_token(
+    tmp_path: Path,
+) -> None:
+    settings = application_settings(tmp_path)
+    config = ConfigService(settings.config_path)
+    config.update(0, lambda old: with_itiger_token(old, "full-settings-secret"))
+    app = create_app(settings)
+
+    with TestClient(app) as client:
+        fetched = client.get(f"{API_ROOT}/settings").json()["data"]
+        payload = update_payload(Settings.model_validate(fetched))
+        payload["timezone"] = "Asia/Tokyo"
+        response = client.put(f"{API_ROOT}/settings", json=payload)
+
+        assert response.status_code == 200
+        current = app.state.container.config_service.get()
+        assert current.tasks["market.sync_universes"].params["itiger_token"] == (
+            "full-settings-secret"
+        )
+        assert current.timezone == "Asia/Tokyo"
+        assert "full-settings-secret" not in response.text
+        params = response.json()["data"]["tasks"]["market.sync_universes"]["params"]
+        assert params["itiger_token"] == "********"
+        on_disk = json.loads(settings.config_path.read_text(encoding="utf-8"))
+        assert on_disk["tasks"]["market.sync_universes"]["params"][
+            "itiger_token"
+        ] == "full-settings-secret"
 
 
 def test_two_concurrent_writers_have_one_success_and_one_revision_conflict(

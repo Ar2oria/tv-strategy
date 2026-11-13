@@ -315,9 +315,77 @@ body > #root {
   margin-top: 16px;
 }
 
+.task-log-detail {
+  display: block;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .market-group .ant-card-head-wrapper {
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.market-settings-primary-row {
+  display: flex;
+  align-items: center;
+  column-gap: 24px;
+}
+
+.market-settings-proxy-row {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+}
+
+.market-settings-proxy-row .ant-space {
+  width: 100%;
+}
+
+.market-settings-proxy-row .ant-input {
+  flex: 1 1 320px;
+  min-width: min(100%, 240px);
+}
+
+.network-test-modal .ant-modal-content,
+.network-test-modal .ant-modal-header {
+  background: #202634;
+}
+
+.network-test-modal .ant-modal-title,
+.network-test-modal .ant-modal-close,
+.network-test-modal .ant-typography {
+  color: #e6e9f0;
+}
+
+.network-test-modal .ant-typography-secondary {
+  color: #a6adbd;
+}
+
+.network-test-modal .ant-input {
+  color: #e6e9f0;
+  background: #202634;
+  border-color: #344054;
+}
+
+.network-test-modal .ant-input::placeholder {
+  color: #a6adbd;
+}
+
+.network-test-modal .ant-btn-default,
+.network-test-modal .ant-alert {
+  color: #e6e9f0;
+  background: #262e40;
+  border-color: #344054;
+}
+
+.network-test-detail {
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .market-group .ant-input,

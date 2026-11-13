@@ -68,12 +68,14 @@ export function TaskTable({
       title: "启用",
       key: "enabled",
       render: (_, task) => (
-        <Switch
-          aria-label={`启用 ${task.name}`}
-          checked={task.enabled}
-          loading={busyTask === task.name}
-          onChange={(checked) => onToggleEnabled(task, checked)}
-        />
+        <span onClick={(event) => event.stopPropagation()}>
+          <Switch
+            aria-label={`启用 ${task.name}`}
+            checked={task.enabled}
+            loading={busyTask === task.name}
+            onChange={(checked) => onToggleEnabled(task, checked)}
+          />
+        </span>
       ),
     },
     {
@@ -104,15 +106,11 @@ export function TaskTable({
         <Space wrap>
           <Button
             size="small"
-            aria-label={`历史 ${task.name}`}
-            onClick={() => onSelect(task)}
-          >
-            历史
-          </Button>
-          <Button
-            size="small"
             aria-label={`配置 ${task.name}`}
-            onClick={() => onConfigure(task)}
+            onClick={(event) => {
+              event.stopPropagation();
+              onConfigure(task);
+            }}
           >
             配置
           </Button>
@@ -121,7 +119,10 @@ export function TaskTable({
             type="primary"
             aria-label={`立即执行 ${task.name}`}
             loading={busyTask === task.name}
-            onClick={() => onRunNow(task)}
+            onClick={(event) => {
+              event.stopPropagation();
+              onRunNow(task);
+            }}
           >
             立即执行
           </Button>
@@ -142,6 +143,21 @@ export function TaskTable({
       rowClassName={(task) =>
         task.name === selectedTaskName ? "ant-table-row-selected" : ""
       }
+      onRow={(task) => ({
+        onClick: () => onSelect(task),
+        onKeyDown: (event) => {
+          if (event.target !== event.currentTarget) {
+            return;
+          }
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onSelect(task);
+          }
+        },
+        tabIndex: 0,
+        role: "row",
+        "aria-label": `查看历史 ${task.name}`,
+      })}
     />
   );
 }

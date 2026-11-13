@@ -194,9 +194,9 @@ def universe_provider(case: UniverseSmokeCase) -> "UniverseProvider":
 
         return AkshareUniverseProvider()
     if case.provider_name == "hstech":
-        from app.providers.hstech_universe import HstechUniverseProvider
+        from app.providers.hstech_api import ItigerUniverseProvider
 
-        return HstechUniverseProvider()
+        return ItigerUniverseProvider()
     if case.provider_name == "invesco":
         from app.providers.invesco_universe import InvescoUniverseProvider
 

@@ -7,6 +7,7 @@ from app.api.bars import router as bars_router
 from app.api.errors import register_application_error_handlers
 from app.api.indicators import router as indicators_router
 from app.api.instruments import router as instruments_router
+from app.api.market_network_test import router as market_network_test_router
 from app.api.responses import register_response_handlers
 from app.api.settings import router as settings_router
 from app.api.tasks import router as tasks_router
@@ -104,6 +105,7 @@ def create_app(settings: AppSettings | None = None) -> FastAPI:
 
 def _register_routes(application: FastAPI) -> None:
     application.include_router(instruments_router)
+    application.include_router(market_network_test_router)
     application.include_router(bars_router)
     application.include_router(indicators_router)
     application.include_router(tasks_router)

@@ -1,5 +1,6 @@
 """Offline session, cursor, and translation tests for BaoStock OHLCV."""
 
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import date
 from types import SimpleNamespace
@@ -144,6 +145,26 @@ def test_a_share_stock_uses_anonymous_session_qfq_and_explicit_fields(
     assert cursor.next_calls == 3
     assert cursor.row_calls == 2
     assert isinstance(adapter.BaoStockOhlcvProvider(), OhlcvProvider)
+
+
+def test_baostock_uses_shared_runtime_without_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str | None, bool]] = []
+
+    @contextmanager
+    def fake_runtime(provider_name: str, proxy_url: str | None, *, wait: bool):
+        calls.append((provider_name, proxy_url, wait))
+        yield
+
+    monkeypatch.setattr(adapter, "provider_runtime", fake_runtime)
+    successful_sdk(monkeypatch, FakeCursor(rows()))
+
+    adapter.BaoStockOhlcvProvider().fetch_daily(
+        A_STOCK, date(2026, 1, 2), date(2026, 1, 3), "qfq"
+    )
+
+    assert calls == [("baostock", None, True)]
 
 
 def test_csi300_index_uses_unadjusted_flag_three(

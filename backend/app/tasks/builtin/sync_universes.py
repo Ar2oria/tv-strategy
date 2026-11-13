@@ -2,9 +2,10 @@
 
 from typing import ClassVar, Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
-from app.providers.errors import ProviderError
+from app.providers.errors import ProviderConfigurationError, ProviderError
+from app.providers.hstech_api import ItigerUniverseProvider
 from app.services.universe_sync_service import UniverseSyncService
 from app.tasks.base import (
     Task,
@@ -39,6 +40,12 @@ class UniverseSyncParams(TaskParams):
     """Refresh all known universes by default or an explicit subset."""
 
     universe_codes: tuple[str, ...] = ()
+    itiger_token: str = Field(
+        default="",
+        max_length=4_096,
+        title="iTiger Token",
+        description="留空则使用默认 Token；保存到配置文件，不会写入运行历史或日志。",
+    )
 
     @field_validator("universe_codes")
     @classmethod
@@ -69,6 +76,16 @@ class SyncUniversesTask(Task):
         for current, code in enumerate(codes, start=1):
             try:
                 provider = registry.get_universe(code)
+                if code == "hstech" and validated.itiger_token.strip():
+                    if not isinstance(provider, ItigerUniverseProvider):
+                        raise ProviderConfigurationError(
+                            "iTiger provider is not configured for token override"
+                        )
+                    provider = ItigerUniverseProvider(
+                        request_timeout_seconds=provider.request_timeout_seconds,
+                        proxy_url=provider.proxy_url,
+                        bearer_token=validated.itiger_token.strip(),
+                    )
                 market = UNIVERSE_MARKETS.get(code)
                 timeout = (
                     context.settings.markets[market].request_timeout_seconds

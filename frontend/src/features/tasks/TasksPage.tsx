@@ -10,16 +10,21 @@ import {
   startTaskRun,
   updateTaskConfig,
 } from "../../api/endpoints";
-import type { JsonObject } from "../../types/api";
+import type { JsonObject, ResponseMeta } from "../../types/api";
 import type { TaskDescriptor } from "../../types/task";
 import { TaskConfigDrawer } from "./TaskConfigDrawer";
 import { TaskRunHistory } from "./TaskRunHistory";
 import { TaskTable } from "./TaskTable";
-import { hasActiveRun, latestRun } from "./taskRuns";
+import { latestRun } from "./taskRuns";
 import { useWorkspaceVisibility } from "../workspace/WorkspaceVisibility";
 
-const RUN_POLL_INTERVAL_MS = 2000;
-const HISTORY_LIMIT = 20;
+const RUN_POLL_INTERVAL_MS = 3000;
+const PAGE_SIZE = 20;
+
+function totalOf(meta: ResponseMeta): number {
+  const total = meta.total;
+  return typeof total === "number" && Number.isFinite(total) && total >= 0 ? total : 0;
+}
 
 interface SavePayload {
   cron: string;
@@ -41,6 +46,8 @@ export function TasksPage() {
   const queryClient = useQueryClient();
   const [selectedTask, setSelectedTask] = useState<TaskDescriptor | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null);
+  const [runsPage, setRunsPage] = useState(1);
+  const [logsPage, setLogsPage] = useState(1);
   const [busyTask, setBusyTask] = useState<string | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [conflict, setConflict] = useState(false);
@@ -59,23 +66,29 @@ export function TasksPage() {
     [tasksQuery.data],
   );
   const runsQuery = useQuery({
-    queryKey: ["task-runs", activeTaskName],
+    queryKey: ["task-runs", activeTaskName, runsPage],
     enabled: activeTaskName !== null,
     retry: false,
     queryFn: async () =>
-      (await getTaskRuns(activeTaskName as string, HISTORY_LIMIT, 0)).data,
+      getTaskRuns(activeTaskName as string, PAGE_SIZE, (runsPage - 1) * PAGE_SIZE),
   });
 
-  const runs = useMemo(() => runsQuery.data ?? [], [runsQuery.data]);
-  const active = hasActiveRun(runs);
+  const runs = useMemo(() => runsQuery.data?.data ?? [], [runsQuery.data]);
+  const runsTotal = totalOf(runsQuery.data?.meta ?? {});
   const workspaceActive = useWorkspaceVisibility();
 
   const logsQuery = useQuery({
-    queryKey: ["task-logs", selectedRunId],
+    queryKey: ["task-logs", selectedRunId, logsPage],
     enabled: selectedRunId !== null,
     retry: false,
-    queryFn: async () => (await getTaskLogs(selectedRunId as number)).data,
+    queryFn: async () =>
+      getTaskLogs(
+        selectedRunId as number,
+        PAGE_SIZE,
+        (logsPage - 1) * PAGE_SIZE,
+      ),
   });
+  const logsTotal = totalOf(logsQuery.data?.meta ?? {});
 
   const saveMutation = useMutation({
     mutationFn: async (payload: SavePayload) => {
@@ -100,6 +113,7 @@ export function TasksPage() {
       setSaveError(null);
       setConflict(false);
       setSelectedTask(result.data);
+      setDrawerOpen(false);
       await queryClient.invalidateQueries({ queryKey: ["tasks"] });
     },
     onError: async (error: unknown) => {
@@ -126,13 +140,21 @@ export function TasksPage() {
       setBusyTask(task.name);
       setRunError(null);
     },
-    onSuccess: async (_result, task) => {
+    onSuccess: (result, task) => {
       // Selecting for history must not re-open the configuration drawer.
       setDrawerOpen(false);
       setSelectedTask(task);
-      setSelectedRunId(null);
-      await queryClient.invalidateQueries({ queryKey: ["task-runs", task.name] });
-      await queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      setSelectedRunId(result.data.id);
+      setRunsPage(1);
+      setLogsPage(1);
+      void queryClient
+        .fetchQuery({
+          queryKey: ["task-logs", result.data.id, 1],
+          queryFn: () => getTaskLogs(result.data.id, PAGE_SIZE, 0),
+        })
+        .catch(() => undefined);
+      void queryClient.invalidateQueries({ queryKey: ["task-runs", task.name] });
+      void queryClient.invalidateQueries({ queryKey: ["tasks"] });
     },
     onError: (error: unknown) => {
       setRunError(messageFor(error));
@@ -161,16 +183,24 @@ export function TasksPage() {
   });
 
   useEffect(() => {
-    if (!active || activeTaskName === null || !workspaceActive) {
+    if (!workspaceActive) {
       return;
     }
     const timer = setInterval(() => {
-      void queryClient.invalidateQueries({
-        queryKey: ["task-runs", activeTaskName],
-      });
+      void queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      if (activeTaskName !== null) {
+        void queryClient.invalidateQueries({
+          queryKey: ["task-runs", activeTaskName],
+        });
+      }
+      if (selectedRunId !== null) {
+        void queryClient.invalidateQueries({
+          queryKey: ["task-logs", selectedRunId],
+        });
+      }
     }, RUN_POLL_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [active, activeTaskName, queryClient, workspaceActive]);
+  }, [activeTaskName, queryClient, selectedRunId, workspaceActive]);
 
   const tasks = useMemo(() => tasksQuery.data ?? [], [tasksQuery.data]);
   const newestRun = latestRun(runs);
@@ -178,6 +208,7 @@ export function TasksPage() {
   useEffect(() => {
     if (selectedRunId === null && newestRun !== null) {
       setSelectedRunId(newestRun.id);
+      setLogsPage(1);
     }
   }, [newestRun, selectedRunId]);
 
@@ -198,9 +229,14 @@ export function TasksPage() {
           onSelect={(task) => {
             setSelectedTask(task);
             setSelectedRunId(null);
+            setRunsPage(1);
+            setLogsPage(1);
           }}
           onConfigure={(task) => {
             setSelectedTask(task);
+            setSelectedRunId(null);
+            setRunsPage(1);
+            setLogsPage(1);
             setDrawerOpen(true);
             setConflict(false);
             setSaveError(null);
@@ -213,12 +249,28 @@ export function TasksPage() {
       </Card>
       {selectedTask === null ? null : (
         <Card size="small" title={`${selectedTask.display_name} 运行历史`}>
+          {logsQuery.error === null ? null : (
+            <Alert type="error" showIcon title="运行日志加载失败" />
+          )}
           <TaskRunHistory
             runs={runs}
             selectedRunId={selectedRunId}
-            logs={logsQuery.data ?? []}
+            logs={logsQuery.data?.data ?? []}
             logsLoading={logsQuery.isFetching}
-            onSelectRun={(run) => setSelectedRunId(run.id)}
+            runsTotal={runsTotal}
+            runsPage={runsPage}
+            logsTotal={logsTotal}
+            logsPage={logsPage}
+            onRunsPageChange={(page) => {
+              setRunsPage(page);
+              setSelectedRunId(null);
+              setLogsPage(1);
+            }}
+            onLogsPageChange={setLogsPage}
+            onSelectRun={(run) => {
+              setSelectedRunId(run.id);
+              setLogsPage(1);
+            }}
             onRefresh={() => {
               void runsQuery.refetch();
             }}

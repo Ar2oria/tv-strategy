@@ -13,6 +13,9 @@ from app.config.application import DEFAULT_RATE_LIMIT_MAX_ENTRIES
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 TASK_RUN_PATH = re.compile(r"^/api/v1/tasks/[^/]+/runs/?$")
+NETWORK_TEST_PATH = re.compile(
+    r"^/api/v1/settings/markets/[^/]+/network-test/?$"
+)
 COMPUTE_PATH = "/api/v1/indicators/compute"
 READ_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
@@ -98,7 +101,9 @@ class InMemoryFixedWindowRateLimiter:
 def bucket_for_request(method: str, path: str) -> RateBucket:
     normalized_path = path.rstrip("/") or "/"
     if method == "POST" and (
-        normalized_path == COMPUTE_PATH or TASK_RUN_PATH.fullmatch(path) is not None
+        normalized_path == COMPUTE_PATH
+        or TASK_RUN_PATH.fullmatch(path) is not None
+        or NETWORK_TEST_PATH.fullmatch(normalized_path) is not None
     ):
         return RateBucket.COMPUTE
     return RateBucket.READ if method in READ_METHODS else RateBucket.WRITE

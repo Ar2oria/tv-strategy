@@ -1,5 +1,5 @@
 import type { Page, Route } from "@playwright/test";
-import type { TaskDescriptor } from "../src/types/task";
+import type { TaskDescriptor, TaskLogDTO, TaskRunDTO } from "../src/types/task";
 
 /** Deterministic API fixtures so E2E never touches a real provider. */
 
@@ -220,8 +220,22 @@ const LOG = {
   run_id: 11,
   level: "INFO",
   message: "Synchronized 2 instruments",
-  context: { count: 2 },
+  context: { run_id: 11, symbol: "BINANCE:BTC/USDT", bar_count: 2 },
   created_at: "2026-01-08T00:00:09Z",
+};
+
+const ERROR_LOG = {
+  id: 22,
+  run_id: 11,
+  level: "ERROR",
+  message: "Instrument synchronization failed",
+  context: {
+    run_id: 11,
+    universe_code: "nasdaq100",
+    error_type: "ProviderUnavailable",
+    detail: "CCXT binance OHLCV request failed (NetworkError)",
+  },
+  created_at: "2026-01-08T00:00:10Z",
 };
 
 const SETTINGS = {
@@ -272,6 +286,32 @@ const SETTINGS = {
   },
 };
 
+interface NetworkTestFixture {
+  market: string;
+  provider: string;
+  symbol: string;
+  connected: boolean;
+  latency_ms: number;
+  price: number | null;
+  price_date: string | null;
+  currency: string | null;
+  error_type: string | null;
+  detail: string | null;
+}
+
+const NETWORK_TEST_RESULT: NetworkTestFixture = {
+  market: "a_share",
+  provider: "akshare",
+  symbol: "600519.SH",
+  connected: true,
+  latency_ms: 12.3,
+  price: 101.5,
+  price_date: "2026-11-11",
+  currency: "CNY",
+  error_type: null,
+  detail: null,
+};
+
 function envelope(data: unknown, meta: Record<string, unknown> = {}) {
   return { success: true, data, error: null, meta };
 }
@@ -290,6 +330,9 @@ export interface ApiState {
   settings: typeof SETTINGS;
   task: TaskDescriptor;
   revisionConflict: boolean;
+  networkTestResult: NetworkTestFixture;
+  runs: TaskRunDTO[];
+  logs: TaskLogDTO[];
 }
 
 export function createState(): ApiState {
@@ -299,6 +342,9 @@ export function createState(): ApiState {
     settings: structuredClone(SETTINGS),
     task: structuredClone(TASK) as unknown as TaskDescriptor,
     revisionConflict: false,
+    networkTestResult: structuredClone(NETWORK_TEST_RESULT),
+    runs: [structuredClone(RUN) as unknown as TaskRunDTO],
+    logs: [structuredClone(LOG) as unknown as TaskLogDTO, structuredClone(ERROR_LOG) as unknown as TaskLogDTO],
   };
 }
 
@@ -367,10 +413,19 @@ export async function installApiRoutes(page: Page, state: ApiState) {
       return json(route, envelope({ ...RUN, status: "queued" }), 202);
     }
     if (path.endsWith("/runs")) {
-      return json(route, envelope([RUN], { count: 1 }));
+      const limit = Number(url.searchParams.get("limit") ?? 20);
+      const offset = Number(url.searchParams.get("offset") ?? 0);
+      const items = state.runs.slice(offset, offset + limit);
+      return json(route, envelope(items, { count: items.length, total: state.runs.length }));
     }
     if (path.includes("/task-runs/") && path.endsWith("/logs")) {
-      return json(route, envelope([LOG], { count: 1 }));
+      const match = path.match(/\/task-runs\/(\d+)\/logs$/);
+      const runId = match === null ? null : Number(match[1]);
+      const limit = Number(url.searchParams.get("limit") ?? 20);
+      const offset = Number(url.searchParams.get("offset") ?? 0);
+      const runLogs = state.logs.filter((log) => log.run_id === runId);
+      const items = runLogs.slice(offset, offset + limit);
+      return json(route, envelope(items, { count: items.length, total: runLogs.length }));
     }
     if (path === "/api/v1/settings" && request.method() === "PUT") {
       const body = request.postDataJSON() as Record<string, unknown>;
@@ -397,6 +452,13 @@ export async function installApiRoutes(page: Page, state: ApiState) {
           Number((body as { expected_revision: number }).expected_revision) + 1,
       };
       return json(route, envelope(state.settings));
+    }
+    if (path.endsWith("/network-test") && request.method() === "POST") {
+      const body = request.postDataJSON() as { symbol: string };
+      return json(
+        route,
+        envelope({ ...state.networkTestResult, symbol: body.symbol }),
+      );
     }
     if (path === "/api/v1/settings") {
       return json(route, envelope(state.settings));

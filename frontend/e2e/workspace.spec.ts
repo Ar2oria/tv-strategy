@@ -70,7 +70,7 @@ test("keeps Task and Settings state when Analysis closes and reopens", async ({
   await page.getByRole("combobox", { name: "股票搜索" }).fill("AAA");
 
   await page.getByRole("link", { name: "Task 管理" }).click();
-  await page.getByRole("button", { name: "历史 market.sync" }).click();
+  await page.getByText("Synchronize market data", { exact: true }).click();
   await expect(page.getByText("Synchronized 2 instruments")).toBeVisible();
 
   await page.getByRole("button", { name: "关闭 图表分析" }).click();

@@ -1,6 +1,6 @@
 """Task catalog, configuration, immediate execution, history, and log routes."""
 
-from typing import Annotated, Self
+from typing import Annotated, Literal, Self
 
 from fastapi import APIRouter, Path, Query, Request
 from fastapi.responses import JSONResponse
@@ -105,6 +105,7 @@ def get_task_runs(
             "task_name": task_name,
             "limit": limit,
             "offset": offset,
+            "total": _service(request).count_runs(task_name),
         },
     )
 
@@ -115,9 +116,17 @@ def get_task_logs(
     request: Request,
     limit: PageLimit = DEFAULT_LOG_LIMIT,
     offset: PageOffset = 0,
+    order: Literal["asc", "desc"] = "desc",
 ) -> JSONResponse:
-    logs = _service(request).logs(run_id, limit=limit, offset=offset)
+    service = _service(request)
+    logs = service.logs(run_id, limit=limit, offset=offset, order=order)
     return success_response(
         logs,
-        meta={"count": len(logs), "run_id": run_id, "limit": limit, "offset": offset},
+        meta={
+            "count": len(logs),
+            "run_id": run_id,
+            "limit": limit,
+            "offset": offset,
+            "total": service.count_logs(run_id),
+        },
     )

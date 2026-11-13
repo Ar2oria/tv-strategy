@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Iterator
+from unittest.mock import MagicMock, Mock
 
 import httpx
 import pytest
@@ -164,3 +165,78 @@ def test_invalid_url_fails_without_leaking_it(url: str) -> None:
             fetch_bytes(url, max_bytes=1, timeout=1.0)
 
     assert str(captured.value) == "Invalid provider URL"
+
+
+def test_verified_text_plain_is_accepted_alongside_the_primary_media_type() -> None:
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get(URL).respond(
+            200,
+            headers={"Content-Type": "text/plain; charset=UTF-8"},
+            content=b'{"holdings": []}',
+        )
+
+        content = fetch_bytes(
+            URL,
+            max_bytes=100,
+            timeout=1.0,
+            expected_content_type=("application/json", "text/plain"),
+        )
+
+    assert content == b'{"holdings": []}'
+
+
+def test_unlisted_html_is_rejected_even_when_json_is_allowed() -> None:
+    with respx.mock(assert_all_called=True) as mock:
+        mock.get(URL).respond(
+            200,
+            headers={"Content-Type": "text/html"},
+            content=b"<html>not provider data</html>",
+        )
+
+        with pytest.raises(ProviderDataInvalid, match="Content-Type"):
+            fetch_bytes(
+                URL,
+                max_bytes=100,
+                timeout=1.0,
+                expected_content_type=("application/json", "text/plain"),
+            )
+
+
+@pytest.mark.parametrize(
+    "expected",
+    [(), ("application/json", ""), ("application/json", 1)],
+    ids=["empty-allowlist", "blank-entry", "non-string-entry"],
+)
+def test_invalid_media_type_allowlists_fail_before_any_request(
+    expected: tuple[object, ...],
+) -> None:
+    with respx.mock(assert_all_called=False):
+        with pytest.raises(ValueError):
+            fetch_bytes(
+                URL,
+                max_bytes=100,
+                timeout=1.0,
+                expected_content_type=expected,  # type: ignore[arg-type]
+            )
+
+
+@pytest.mark.parametrize("proxy_url", [None, "socks5h://127.0.0.1:1080"])
+def test_http_client_uses_only_the_market_proxy(
+    monkeypatch: pytest.MonkeyPatch, proxy_url: str | None
+) -> None:
+    client = MagicMock()
+    client.__enter__.return_value = client
+    stream = MagicMock()
+    stream.__enter__.return_value = httpx.Response(200, content=b"ok")
+    client.stream.return_value = stream
+    constructor = Mock(return_value=client)
+    monkeypatch.setattr("app.providers.http.httpx.Client", constructor)
+
+    assert fetch_bytes(URL, max_bytes=10, timeout=2.0, proxy_url=proxy_url) == b"ok"
+
+    constructor.assert_called_once_with(
+        timeout=2.0,
+        follow_redirects=False,
+        proxy=proxy_url,
+        trust_env=False,
+    )

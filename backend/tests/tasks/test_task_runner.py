@@ -9,6 +9,13 @@ from pydantic import BaseModel
 
 from app.config.defaults import default_settings
 from app.config.models import Settings, TaskSettings
+from app.domain.dto import UniverseSnapshot
+from app.providers.hstech_api import ItigerUniverseProvider
+from app.providers.registry import ProviderRegistry
+from app.repositories.bars import BarRepository
+from app.repositories.instruments import InstrumentRepository
+from app.tasks.builtin.sync_universes import SyncUniversesTask
+from tests.market_sync_fixtures import instrument_dto
 from app.db.database import SessionFactory
 from app.domain.dto import TaskRunDTO
 from app.repositories.task_runs import TaskRunRepository
@@ -195,10 +202,10 @@ async def test_partial_and_unexpected_failure_persist_safe_status_progress_and_l
     assert failed_result.progress == 20
     assert failed_result.error == TASK_EXECUTION_ERROR
     assert "private provider credential" not in str(failed_result)
-    assert all(
-        "private provider credential" not in log.message
-        for log in runs.list_logs(failed.id)
-    )
+    failure_logs = runs.list_logs(failed.id)
+    assert len(failure_logs) == 1
+    assert failure_logs[0].context == {"error_type": "RuntimeError"}
+    assert "private provider credential" not in str(failure_logs)
     assert returned_failure_result.status == "failed"
     assert returned_failure_result.progress == 60
     assert returned_failure_result.error == TASK_EXECUTION_ERROR
@@ -262,6 +269,64 @@ def test_stale_queued_and_running_rows_are_interrupted_at_runner_startup(
     assert runs.get_run(stale.id).finished_at is not None
     assert runs.get_run(queued.id).status == "interrupted"
     assert runs.get_run(queued.id).finished_at is not None
+
+
+@pytest.mark.anyio
+async def test_scheduled_itiger_task_uses_configured_token_without_persisting_it(
+    monkeypatch: pytest.MonkeyPatch,
+    session_factory: SessionFactory,
+) -> None:
+    token = "secret-configured-token"
+    settings = settings_for(
+        (
+            SyncUniversesTask.name,
+            TaskSettings(
+                params={"universe_codes": ["hstech"], "itiger_token": token}
+            ),
+        )
+    )
+    expected = UniverseSnapshot(
+        universe_code="hstech",
+        source="itiger",
+        effective_date=None,
+        members=(instrument_dto("0700.HK"),),
+    )
+    calls: list[str] = []
+
+    def fake_fetch(**kwargs: object) -> UniverseSnapshot:
+        calls.append(str(kwargs["bearer_token"]))
+        return expected
+
+    monkeypatch.setattr(
+        "app.providers.hstech_api.fetch_hstech_api_snapshot", fake_fetch
+    )
+    registry = TaskRegistry()
+    registry.register(SyncUniversesTask)
+    provider_registry = ProviderRegistry(
+        settings=settings,
+        universe_providers={
+            "hstech": ItigerUniverseProvider(bearer_token="initial-token")
+        },
+    )
+    resources = RuntimeResources(
+        instrument_repository=InstrumentRepository(session_factory),
+        bar_repository=BarRepository(session_factory),
+        provider_registry=provider_registry,
+    )
+    runs = TaskRunRepository(session_factory)
+    runner = TaskRunner(registry, runs, settings, resources)
+
+    run = await runner.start(SyncUniversesTask.name, "scheduled")
+    await runner.wait_for_idle()
+
+    assert calls == [token]
+    assert "itiger_token" not in run.params
+    assert "itiger_token" not in run.config_snapshot["params"]
+    persisted = runs.get_run(run.id)
+    assert persisted is not None
+    assert "itiger_token" not in persisted.params
+    assert token not in str(persisted.params)
+    assert token not in str(persisted.config_snapshot)
 
 
 @pytest.mark.anyio

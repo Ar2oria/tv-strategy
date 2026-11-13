@@ -48,14 +48,20 @@ class IsharesSoxxUniverseProvider:
         self,
         *,
         request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        proxy_url: str | None = None,
     ) -> None:
         self._request_timeout_seconds = validate_request_timeout(
             request_timeout_seconds
         )
+        self._proxy_url = proxy_url
 
     @property
     def request_timeout_seconds(self) -> float:
         return self._request_timeout_seconds
+
+    @property
+    def proxy_url(self) -> str | None:
+        return self._proxy_url
 
     def fetch_universe(self, universe_code: str) -> UniverseSnapshot:
         if universe_code != "soxx":
@@ -66,7 +72,8 @@ class IsharesSoxxUniverseProvider:
             SOXX_HOLDINGS_URL,
             max_bytes=SOXX_MAX_BYTES,
             timeout=self._request_timeout_seconds,
-            expected_content_type="text/csv",
+            expected_content_type=("text/csv", "text/plain"),
+            proxy_url=self._proxy_url,
         )
         return UniverseSnapshot(
             universe_code="soxx",

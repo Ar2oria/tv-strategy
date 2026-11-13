@@ -10,7 +10,12 @@ import type {
   InstrumentRecord,
   InstrumentQuery,
 } from "../types/market";
-import type { Settings, SettingsUpdate } from "../types/settings";
+import type {
+  NetworkTestRequest,
+  NetworkTestResult,
+  Settings,
+  SettingsUpdate,
+} from "../types/settings";
 import type {
   TaskConfigUpdate,
   TaskDescriptor,
@@ -24,7 +29,7 @@ import {
   decodeIndicators,
 } from "./decoders/indicator";
 import { decodeBars, decodeInstrumentRecords } from "./decoders/market";
-import { decodeSettings } from "./decoders/settings";
+import { decodeNetworkTestResult, decodeSettings } from "./decoders/settings";
 import {
   decodeTask,
   decodeTaskLogs,
@@ -103,6 +108,17 @@ export function putSettings(update: SettingsUpdate): Promise<ApiResult<Settings>
     method: "PUT",
     ...jsonBody(update),
   });
+}
+
+export function testMarketNetwork(
+  market: string,
+  request: NetworkTestRequest,
+): Promise<ApiResult<NetworkTestResult>> {
+  return apiRequest(
+    `${API_ROOT}/settings/markets/${encodeURIComponent(market)}/network-test`,
+    decodeNetworkTestResult,
+    { method: "POST", ...jsonBody(request) },
+  );
 }
 
 export function listTasks(): Promise<ApiResult<TaskDescriptor[]>> {

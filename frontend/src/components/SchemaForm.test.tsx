@@ -224,4 +224,31 @@ describe("SchemaForm", () => {
 
     expect(onSubmit).toHaveBeenCalledWith({ text: "abc" });
   });
+
+  it("updates the custom action area when actions change after mount", () => {
+    const schemaWithText: RJSFSchema = {
+      type: "object",
+      properties: { text: { type: "string", default: "abc" } },
+    };
+    const { rerender } = render(
+      <SchemaForm<{ text: string }>
+        schema={schemaWithText}
+        formData={{ text: "abc" }}
+        actions={<button type="button" disabled>关闭</button>}
+        onSubmit={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "关闭" })).toBeDisabled();
+
+    rerender(
+      <SchemaForm<{ text: string }>
+        schema={schemaWithText}
+        formData={{ text: "abc" }}
+        actions={<button type="button" disabled={false}>关闭</button>}
+        onSubmit={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "关闭" })).toBeEnabled();
+  });
 });

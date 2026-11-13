@@ -111,7 +111,14 @@ def test_binance_uses_bounded_daily_limit_and_inclusive_range(
 
     result = fetch()
 
-    constructor.assert_called_once_with({"enableRateLimit": True, "timeout": 20_000})
+    constructor.assert_called_once_with(
+        {
+            "enableRateLimit": True,
+            "timeout": 20_000,
+            "requests_trust_env": False,
+            "options": {"fetchMarkets": ["spot"]},
+        }
+    )
     exchange.fetch_ohlcv.assert_called_once_with(
         "BTC/USDT",
         timeframe="1d",
@@ -123,6 +130,67 @@ def test_binance_uses_bounded_daily_limit_and_inclusive_range(
     exchange.close.assert_called_once_with()
     exchange.fetch_paginated_call_deterministic.assert_not_called()
     assert isinstance(adapter.CcxtOhlcvProvider("binance"), OhlcvProvider)
+
+
+def test_ccxt_uses_both_proxy_protocols_and_preserves_spot_discovery(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exchange, constructor = install_exchange(
+        monkeypatch,
+        "binance",
+        [[candle(date(2026, 1, 2))]],
+    )
+    proxy_url = "socks5h://127.0.0.1:1080"
+
+    result = adapter.CcxtOhlcvProvider(
+        "binance", clock=lambda: NOW, proxy_url=proxy_url
+    ).fetch_daily(BTC, date(2026, 1, 2), date(2026, 1, 2), "none")
+
+    assert len(result) == 1
+    constructor.assert_called_once_with(
+        {
+            "enableRateLimit": True,
+            "timeout": 20_000,
+            "requests_trust_env": False,
+            "proxies": {"http": proxy_url, "https": proxy_url},
+            "options": {"fetchMarkets": ["spot"]},
+        }
+    )
+    exchange.close.assert_called_once_with()
+
+
+def test_binance_real_market_discovery_skips_derivative_endpoints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exchange = adapter.CcxtOhlcvProvider("binance")._create_exchange()
+    spot = Mock(return_value={"symbols": []})
+    linear = Mock(return_value={"symbols": []})
+    inverse = Mock(return_value={"symbols": []})
+    monkeypatch.setattr(exchange, "publicGetExchangeInfo", spot)
+    monkeypatch.setattr(exchange, "fapiPublicGetExchangeInfo", linear)
+    monkeypatch.setattr(exchange, "dapiPublicGetExchangeInfo", inverse)
+
+    try:
+        assert exchange.fetch_markets() == []
+    finally:
+        exchange.session.close()
+
+    spot.assert_called_once_with({})
+    linear.assert_not_called()
+    inverse.assert_not_called()
+
+
+def test_real_sync_exchange_cleanup_closes_its_requests_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    provider = adapter.CcxtOhlcvProvider("binance")
+    exchange = provider._create_exchange()
+    session = Mock()
+    monkeypatch.setattr(exchange, "session", session)
+
+    provider._close_exchange(exchange, failure_active=False)
+
+    session.close.assert_called_once_with()
 
 
 def test_binance_full_page_moves_backward_and_short_page_reaches_start(
@@ -195,7 +263,9 @@ def test_okx_uses_history_candles_limit_100_and_backward_pages(
         "okx", okx_instrument, start=start, end=final_day
     )
 
-    constructor.assert_called_once_with({"enableRateLimit": True, "timeout": 20_000})
+    constructor.assert_called_once_with(
+        {"enableRateLimit": True, "timeout": 20_000, "requests_trust_env": False}
+    )
     assert exchange.fetch_ohlcv.call_args_list == [
         call(
             "BTC/USDT",
@@ -506,6 +576,26 @@ def test_exchange_failures_are_typed_sanitized_and_close(
     with pytest.raises(ProviderUnavailable) as captured:
         fetch()
     assert "secret" not in str(captured.value)
+    exchange.close.assert_called_once_with()
+
+
+def test_network_failure_detail_names_exchange_and_operation_without_raw_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exchange, _ = install_exchange(
+        monkeypatch,
+        "binance",
+        [ccxt.NetworkError("https://dapi.binance.com/private?token=secret")],
+    )
+
+    with pytest.raises(ProviderUnavailable) as captured:
+        fetch()
+
+    assert captured.value.detail == (
+        "CCXT binance OHLCV request failed (NetworkError)"
+    )
+    assert "dapi.binance.com" not in (captured.value.detail or "")
+    assert "secret" not in (captured.value.detail or "")
     exchange.close.assert_called_once_with()
 
 

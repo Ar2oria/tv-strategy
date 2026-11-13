@@ -2,6 +2,7 @@
 
 import logging
 import math
+from collections.abc import Mapping
 from numbers import Real
 
 import httpx
@@ -22,15 +23,24 @@ def fetch_bytes(
     *,
     max_bytes: int,
     timeout: float,
-    expected_content_type: str | None = None,
+    expected_content_type: str | tuple[str, ...] | None = None,
+    proxy_url: str | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> bytes:
     """GET at most max_bytes without trusting upstream metadata or content."""
-    _validate_arguments(url, max_bytes, timeout, expected_content_type)
+    allowed_content_types = _validate_arguments(
+        url, max_bytes, timeout, expected_content_type
+    )
     try:
-        with httpx.Client(timeout=timeout, follow_redirects=False) as client:
-            with client.stream("GET", url) as response:
+        with httpx.Client(
+            timeout=timeout,
+            follow_redirects=False,
+            proxy=proxy_url,
+            trust_env=False,
+        ) as client:
+            with client.stream("GET", url, headers=headers) as response:
                 _require_success_status(response)
-                _validate_content_type(response, expected_content_type)
+                _validate_content_type(response, allowed_content_types)
                 _validate_declared_size(response, max_bytes)
                 return _read_bounded(response, max_bytes)
     except httpx.TimeoutException as error:
@@ -50,8 +60,8 @@ def _validate_arguments(
     url: str,
     max_bytes: int,
     timeout: float,
-    expected_content_type: str | None,
-) -> None:
+    expected_content_type: str | tuple[str, ...] | None,
+) -> tuple[str, ...] | None:
     if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
         raise ValueError("max_bytes must be a positive integer")
     if (
@@ -69,14 +79,24 @@ def _validate_arguments(
         raise ValueError("Invalid provider URL") from None
     if parsed.scheme not in {"http", "https"} or not parsed.host:
         raise ValueError("Invalid provider URL")
-    if expected_content_type is not None:
+    if expected_content_type is None:
+        return None
+    candidates = (
+        (expected_content_type,)
+        if isinstance(expected_content_type, str)
+        else expected_content_type
+    )
+    if not isinstance(candidates, tuple) or not candidates:
+        raise ValueError("expected_content_type must contain media types")
+    for candidate in candidates:
         if (
-            not isinstance(expected_content_type, str)
-            or expected_content_type != expected_content_type.strip().lower()
-            or "/" not in expected_content_type
-            or ";" in expected_content_type
+            not isinstance(candidate, str)
+            or candidate != candidate.strip().lower()
+            or "/" not in candidate
+            or ";" in candidate
         ):
             raise ValueError("expected_content_type must be a lowercase media type")
+    return candidates
 
 
 def _require_success_status(response: httpx.Response) -> None:
@@ -91,15 +111,15 @@ def _require_success_status(response: httpx.Response) -> None:
 
 def _validate_content_type(
     response: httpx.Response,
-    expected_content_type: str | None,
+    expected_content_types: tuple[str, ...] | None,
 ) -> None:
-    if expected_content_type is None:
+    if expected_content_types is None:
         return
     header = response.headers.get("content-type")
     if header is None or not header.strip():
         return
     actual = header.partition(";")[0].strip().casefold()
-    if actual != expected_content_type:
+    if actual not in expected_content_types:
         raise ProviderDataInvalid("Provider response has unexpected Content-Type")
 
 

@@ -28,5 +28,9 @@ frontend/playwright-report/
 frontend/blob-report/
 frontend/playwright/.cache/
 
-# Local runtime state
+# Local runtime state and secrets
 data/
+config/settings.json
+
+# Original local iTiger bearer token (never commit)
+config/itiger_token.txt

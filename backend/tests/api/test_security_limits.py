@@ -144,6 +144,23 @@ def test_compute_and_immediate_execution_share_the_strict_compute_bucket(
         assert_api_error(write, 422, "validation_error")
 
 
+def test_network_test_uses_the_compute_rate_limit_bucket(tmp_path: Path) -> None:
+    app = create_app(application_settings(tmp_path, compute_rate_limit=1))
+
+    with TestClient(app) as client:
+        first = client.post(
+            f"{API_ROOT}/settings/markets/a_share/network-test",
+            json={"symbol": "bad symbol"},
+        )
+        limited = client.post(
+            f"{API_ROOT}/settings/markets/a_share/network-test",
+            json={"symbol": "bad symbol"},
+        )
+
+    assert first.status_code == 422
+    assert_api_error(limited, 429, "rate_limit_exceeded")
+
+
 def test_fixed_window_recovers_and_isolates_clients() -> None:
     now = [10.0]
     limiter = InMemoryFixedWindowRateLimiter(

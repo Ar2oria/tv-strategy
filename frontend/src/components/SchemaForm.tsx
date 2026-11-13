@@ -4,7 +4,14 @@ import { getSubmitButtonOptions } from "@rjsf/utils";
 import type { FormContextType, RJSFSchema, SubmitButtonProps, UiSchema } from "@rjsf/utils";
 import validator from "@rjsf/validator-ajv8";
 import { Button } from "antd";
-import { useMemo, type ReactNode } from "react";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
+
+/**
+ * RJSF keeps the first `ButtonTemplates` closure after mount, so a later
+ * `actions` node would render stale inside that slot. Publish the latest
+ * actions through context: the stable template always reads the current node.
+ */
+const SchemaFormActionsContext = createContext<ReactNode>(undefined);
 
 export interface SchemaFormProps<T extends Record<string, unknown>> {
   schema: RJSFSchema;
@@ -66,13 +73,13 @@ export function SchemaForm<T extends Record<string, unknown>>({
               <Button type="primary" htmlType="submit" {...options.props}>
                 {options.submitText}
               </Button>
-              {actions}
+              <SchemaFormActionsSlot />
             </div>
           );
         },
       },
     };
-  }, [actions]);
+  }, [actions === undefined]);
 
   const handleSubmit = (event: IChangeEvent<T>): void => {
     if (event.formData === undefined) {
@@ -82,16 +89,22 @@ export function SchemaForm<T extends Record<string, unknown>>({
   };
 
   return (
-    <TypedForm
-      schema={schema}
-      uiSchema={uiSchema}
-      formData={isolatedFormData}
-      validator={validator}
-      disabled={disabled}
-      formContext={formContext}
-      templates={templates}
-      widgets={widgets}
-      onSubmit={handleSubmit}
-    />
+    <SchemaFormActionsContext.Provider value={actions}>
+      <TypedForm
+        schema={schema}
+        uiSchema={uiSchema}
+        formData={isolatedFormData}
+        validator={validator}
+        disabled={disabled}
+        formContext={formContext}
+        templates={templates}
+        widgets={widgets}
+        onSubmit={handleSubmit}
+      />
+    </SchemaFormActionsContext.Provider>
   );
+}
+
+function SchemaFormActionsSlot() {
+  return <>{useContext(SchemaFormActionsContext)}</>;
 }

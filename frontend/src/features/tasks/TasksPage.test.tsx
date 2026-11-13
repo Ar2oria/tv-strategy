@@ -38,6 +38,8 @@ interface TaskState {
   logs: TaskLogDTO[];
   conflictOnce: boolean;
   rateLimited: boolean;
+  delayRuns: boolean;
+  logsFail: boolean;
 }
 
 const state: TaskState = {
@@ -46,6 +48,8 @@ const state: TaskState = {
   logs: [structuredClone(taskLogPayload) as unknown as TaskLogDTO],
   conflictOnce: false,
   rateLimited: false,
+  delayRuns: false,
+  logsFail: false,
 };
 
 function success(data: unknown, meta: Record<string, unknown> = {}): Response {
@@ -62,14 +66,25 @@ function failure(status: number, code: string, message: string): Response {
   );
 }
 
-function respond(recorded: Recorded): Response {
+function taskView(task: TaskDescriptor): TaskDescriptor {
+  const token = task.params.itiger_token;
+  if (typeof token !== "string" || token.trim() === "") {
+    return task;
+  }
+  return {
+    ...task,
+    params: { ...task.params, itiger_token: "********" },
+  };
+}
+
+async function respond(recorded: Recorded): Promise<Response> {
   const url = new URL(recorded.url, "http://localhost");
   const path = url.pathname;
   if (path === "/api/v1/tasks") {
-    return success([state.task], { count: 1 });
+    return success([taskView(state.task)], { count: 1 });
   }
   if (path.endsWith("/config") && recorded.method === "GET") {
-    return success(state.task);
+    return success(taskView(state.task));
   }
   if (path.endsWith("/config") && recorded.method === "PUT") {
     if (state.conflictOnce) {
@@ -96,7 +111,7 @@ function respond(recorded: Recorded): Response {
         ? {}
         : { params: body.params as TaskDescriptor["params"] }),
     };
-    return success(state.task);
+    return success(taskView(state.task));
   }
   if (path.endsWith("/runs") && recorded.method === "POST") {
     state.runs = [
@@ -114,10 +129,25 @@ function respond(recorded: Recorded): Response {
     );
   }
   if (path.endsWith("/runs")) {
-    return success(state.runs, { count: state.runs.length });
+    const limit = Number(url.searchParams.get("limit") ?? 20);
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const items = state.runs.slice(offset, offset + limit);
+    const response = success(items, { count: items.length, total: state.runs.length });
+    return state.delayRuns
+      ? new Promise<Response>((resolve) => setTimeout(() => resolve(response), 100))
+      : response;
   }
   if (path.includes("/task-runs/") && path.endsWith("/logs")) {
-    return success(state.logs, { count: state.logs.length });
+    if (state.logsFail) {
+      return failure(500, "internal_error", "Log fetch failed");
+    }
+    const match = path.match(/\/task-runs\/(\d+)\/logs$/);
+    const runId = match === null ? null : Number(match[1]);
+    const limit = Number(url.searchParams.get("limit") ?? 20);
+    const offset = Number(url.searchParams.get("offset") ?? 0);
+    const runLogs = state.logs.filter((log) => log.run_id === runId);
+    const items = runLogs.slice(offset, offset + limit);
+    return success(items, { count: items.length, total: runLogs.length });
   }
   return failure(404, "not_found", "Resource not found");
 }
@@ -129,6 +159,8 @@ beforeEach(() => {
   state.logs = [structuredClone(taskLogPayload) as unknown as TaskLogDTO];
   state.conflictOnce = false;
   state.rateLimited = false;
+  state.delayRuns = false;
+  state.logsFail = false;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -211,6 +243,9 @@ describe("TasksPage", { timeout: 40000 }, () => {
       enabled: true,
     });
     expect(await screen.findByText("30 8 * * 1-5")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
+    );
   });
 
   it("shows a backend field error for a cron the server rejects", async () => {
@@ -255,42 +290,101 @@ describe("TasksPage", { timeout: 40000 }, () => {
     expect(await screen.findByText("运行中")).toBeInTheDocument();
   });
 
-  it("polls run history while a run is active and stops on a terminal state", async () => {
+  it("selects the new run and fetches its logs before run history finishes", async () => {
+    state.delayRuns = true;
     renderTasks();
     fireEvent.click(
       await screen.findByRole("button", { name: "立即执行 market.sync" }),
     );
-    await screen.findByText("运行中");
 
-    const historyCallsBefore = requests.filter((request) =>
-      /\/tasks\/market\.sync\/runs$/.test(new URL(request.url, "http://x").pathname),
-    ).length;
+    await waitFor(() =>
+      expect(
+        requests.some((request) => /\/task-runs\/9\/logs/.test(request.url)),
+      ).toBe(true),
+    );
+    const logIndex = requests.findIndex((request) =>
+      /\/task-runs\/9\/logs/.test(request.url),
+    );
+    const historyIndex = requests.findIndex(
+      (request) =>
+        request.method === "GET" && /\/tasks\/market\.sync\/runs/.test(request.url),
+    );
+    expect(logIndex).toBeGreaterThanOrEqual(0);
+    expect(historyIndex).toBeGreaterThan(logIndex);
+    expect(await screen.findByTestId("task-run-9")).toHaveClass("ant-table-row-selected");
+  });
 
-    state.runs = [
-      { ...taskRunPayload, id: 9, status: "success" } as unknown as TaskRunDTO,
-      ...state.runs,
-    ];
-
-    await waitFor(
-      () => {
-        const historyCalls = requests.filter((request) =>
-          /\/tasks\/market\.sync\/runs$/.test(
-            new URL(request.url, "http://x").pathname,
-          ),
-        ).length;
-        expect(historyCalls).toBeGreaterThan(historyCallsBefore);
+  it("persists the iTiger token and lets immediate runs use saved config", async () => {
+    state.task = {
+      ...state.task,
+      name: "market.sync_universes",
+      params_schema: {
+        ...state.task.params_schema,
+        properties: {
+          ...state.task.params_schema.properties,
+          itiger_token: { type: "string" },
+        },
       },
-      { timeout: 10000 },
+    };
+    renderTasks();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "配置 market.sync_universes" }),
+    );
+    const drawer = await screen.findByRole("dialog");
+    await userEvent.type(
+      within(drawer).getByLabelText(/itiger/i),
+      "secret-token",
+    );
+    fireEvent.click(within(drawer).getByRole("button", { name: /保\s*存配置/ }));
+    await waitFor(() => expect(writes("PUT")).toHaveLength(1));
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "立即执行 market.sync_universes" }),
     );
 
-    const settled = requests.filter((request) =>
-      /\/tasks\/market\.sync\/runs$/.test(new URL(request.url, "http://x").pathname),
-    ).length;
-    await new Promise((resolve) => setTimeout(resolve, 1200));
-    const after = requests.filter((request) =>
-      /\/tasks\/market\.sync\/runs$/.test(new URL(request.url, "http://x").pathname),
-    ).length;
-    expect(after).toBe(settled);
+    await waitFor(() => expect(writes("POST")).toHaveLength(1));
+    expect(
+      (writes("PUT")[0].body as { params: { itiger_token?: string } }).params
+        .itiger_token,
+    ).toBe("secret-token");
+    expect(state.task.params.itiger_token).toBe("secret-token");
+    expect(writes("POST")[0].body).toEqual({});
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "配置 market.sync_universes" }),
+    );
+    const reopened = await screen.findByRole("dialog");
+    expect(within(reopened).getByLabelText(/itiger/i)).toHaveValue("********");
+    expect(screen.queryByDisplayValue("secret-token")).not.toBeInTheDocument();
+  });
+
+  it("shows log loading errors instead of leaving an unexplained empty view", async () => {
+    state.logsFail = true;
+    renderTasks();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "立即执行 market.sync" }),
+    );
+
+    expect(await screen.findByText("运行日志加载失败")).toBeInTheDocument();
+  });
+
+  it("refreshes tasks run history and logs every three seconds including terminal states", async () => {
+    renderTasks();
+    fireEvent.click(
+      await screen.findByRole("row", { name: "查看历史 market.sync" }),
+    );
+    await screen.findByText("Completed");
+    const countCalls = (pattern: RegExp): number =>
+      requests.filter((request) => pattern.test(request.url)).length;
+    const taskCallsBefore = countCalls(/\/api\/v1\/tasks$/);
+    const runCallsBefore = countCalls(/\/tasks\/market\.sync\/runs/);
+    const logCallsBefore = countCalls(/\/task-runs\/\d+\/logs/);
+
+    await new Promise((resolve) => setTimeout(resolve, 3200));
+
+    expect(countCalls(/\/api\/v1\/tasks$/)).toBeGreaterThan(taskCallsBefore);
+    expect(countCalls(/\/tasks\/market\.sync\/runs/)).toBeGreaterThan(runCallsBefore);
+    expect(countCalls(/\/task-runs\/\d+\/logs/)).toBeGreaterThan(logCallsBefore);
   });
 
   it("pauses active-run polling while the task tab is hidden", async () => {
@@ -299,23 +393,118 @@ describe("TasksPage", { timeout: 40000 }, () => {
     fireEvent.click(
       await screen.findByRole("button", { name: "立即执行 market.sync" }),
     );
-    await screen.findByText("运行中");
-    interval.mockClear();
+    await screen.findByText("运行中", undefined, { timeout: 10_000 });
 
     fireEvent.click(screen.getByRole("link", { name: "图表分析" }));
+    interval.mockClear();
     await new Promise((resolve) => setTimeout(resolve, 2500));
 
-    expect(interval.mock.calls.filter(([, milliseconds]) => milliseconds === 2000)).toHaveLength(0);
+    expect(interval.mock.calls.filter(([, milliseconds]) => milliseconds === 3000)).toHaveLength(0);
     interval.mockRestore();
   });
 
   it("shows run logs for a selected historical run", async () => {
     renderTasks();
     fireEvent.click(
-      await screen.findByRole("button", { name: "历史 market.sync" }),
+      await screen.findByRole("row", { name: "查看历史 market.sync" }),
     );
 
     expect(await screen.findByText("Completed")).toBeInTheDocument();
+  });
+
+  it("paginates runs and logs independently with latest items first", async () => {
+    state.runs = Array.from({ length: 25 }, (_, index) => ({
+      ...taskRunPayload,
+      id: 25 - index,
+      status: "success",
+    })) as unknown as TaskRunDTO[];
+    state.logs = Array.from({ length: 25 }, (_, index) => ({
+      ...taskLogPayload,
+      id: 125 - index,
+      run_id: 25,
+      message: `log-${25 - index}`,
+    })) as unknown as TaskLogDTO[];
+    renderTasks();
+    fireEvent.click(
+      await screen.findByRole("row", { name: "查看历史 market.sync" }),
+    );
+
+    expect(await screen.findByTestId("task-run-25")).toBeInTheDocument();
+    expect(screen.getByTestId("task-run-6")).toBeInTheDocument();
+    expect(screen.queryByTestId("task-run-5")).not.toBeInTheDocument();
+    expect(await screen.findByText("log-25")).toBeInTheDocument();
+    expect(screen.queryByText("log-5")).not.toBeInTheDocument();
+
+    const runsNavigation = screen.getByRole("navigation", { name: "运行批次分页" });
+    fireEvent.click(within(runsNavigation).getByRole("button", { name: "Page 2" }));
+    expect(await screen.findByTestId("task-run-5")).toBeInTheDocument();
+    expect(
+      requests.some((request) =>
+        /\/tasks\/market\.sync\/runs\?limit=20&offset=20/.test(request.url),
+      ),
+    ).toBe(true);
+
+    state.logs = state.logs.map((log) => ({ ...log, run_id: 5 }));
+    const logsNavigation = screen.getByRole("navigation", { name: "运行日志分页" });
+    fireEvent.click(await within(logsNavigation).findByRole("button", { name: "Page 2" }));
+    expect(await screen.findByText("log-5")).toBeInTheDocument();
+    expect(screen.getByTestId("task-run-5")).toHaveClass("ant-table-row-selected");
+    expect(
+      requests.some((request) =>
+        /\/task-runs\/\d+\/logs\?limit=20&offset=20/.test(request.url),
+      ),
+    ).toBe(true);
+  });
+
+  it("resets selected run and both pages when configuring a task", async () => {
+    state.runs = Array.from({ length: 25 }, (_, index) => ({
+      ...taskRunPayload,
+      id: 25 - index,
+      status: "success",
+    })) as unknown as TaskRunDTO[];
+    state.logs = Array.from({ length: 25 }, (_, index) => ({
+      ...taskLogPayload,
+      id: 125 - index,
+      run_id: 25,
+      message: `log-${25 - index}`,
+    })) as unknown as TaskLogDTO[];
+    renderTasks();
+    fireEvent.click(
+      await screen.findByRole("row", { name: "查看历史 market.sync" }),
+    );
+    fireEvent.click(
+      await within(screen.getByRole("navigation", { name: "运行批次分页" })).findByRole(
+        "button",
+        { name: "Page 2" },
+      ),
+    );
+    expect(await screen.findByTestId("task-run-5")).toBeInTheDocument();
+    state.logs = state.logs.map((log) => ({ ...log, run_id: 5 }));
+    fireEvent.click(
+      await within(screen.getByRole("navigation", { name: "运行日志分页" })).findByRole(
+        "button",
+        { name: "Page 2" },
+      ),
+    );
+    expect(await screen.findByText("log-5")).toBeInTheDocument();
+    requests.length = 0;
+
+    fireEvent.click(screen.getByRole("button", { name: "配置 market.sync" }));
+    await screen.findByRole("dialog");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("task-run-25")).toHaveClass("ant-table-row-selected"),
+    );
+    expect(
+      requests.some((request) =>
+        /\/tasks\/market\.sync\/runs\?limit=20&offset=0/.test(request.url),
+      ),
+    ).toBe(true);
+    expect(
+      requests.some((request) =>
+        /\/task-runs\/25\/logs\?limit=20&offset=0/.test(request.url),
+      ),
+    ).toBe(true);
   });
 
   it("refreshes on 409 and asks the user to reapply instead of overwriting", async () => {

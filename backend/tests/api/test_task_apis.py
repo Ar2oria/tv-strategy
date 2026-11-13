@@ -1,6 +1,7 @@
 """Isolated Task management API tests with persistent runs and logs."""
 
 import time
+from datetime import UTC, datetime, timedelta
 from collections.abc import Iterator
 from pathlib import Path
 from typing import ClassVar
@@ -22,6 +23,7 @@ from app.services.task_runner import TaskRunner
 from app.services.task_service import TaskService
 from app.tasks.base import Task, TaskContext, TaskParams, TaskResult
 from app.tasks.builtin.purge_history import PurgeHistoryTask
+from app.tasks.builtin.sync_universes import SyncUniversesTask, UniverseSyncParams
 from app.tasks.registry import TaskRegistry
 
 API_ROOT = "/api/v1"
@@ -51,6 +53,7 @@ def api(
     registry = TaskRegistry()
     registry.register(PurgeHistoryTask)
     registry.register(APITask)
+    registry.register(SyncUniversesTask)
     config = ConfigService(tmp_path / "settings.json")
     config.update(
         0,
@@ -101,8 +104,9 @@ def test_list_get_and_revision_checked_config_update(
     assert {item["name"] for item in listed.json()["data"]} == {
         APITask.name,
         PurgeHistoryTask.name,
+        SyncUniversesTask.name,
     }
-    assert listed.json()["meta"]["count"] == 2
+    assert listed.json()["meta"]["count"] == 3
     assert current.status_code == 200
     assert (
         current.json()["data"]["params_schema"]["properties"]["value"]["default"] == 1
@@ -172,6 +176,108 @@ def test_immediate_run_accepts_empty_body_and_list_serializes_last_run(
         item for item in listed.json()["data"] if item["name"] == APITask.name
     )
     assert api_task["last_run"]["id"] == run_id
+
+
+def test_run_and_log_pages_include_totals_and_latest_first_ordering(
+    api: tuple[TestClient, ConfigService],
+) -> None:
+    client, _ = api
+    repository = client.app.state.task_service._runs
+    created = [
+        repository.create_run(
+            APITask.name,
+            "manual",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=index),
+        )
+        for index in range(25)
+    ]
+    selected = created[0]
+    for index in range(25):
+        repository.create_log(
+            selected.id,
+            "INFO",
+            f"log-{index}",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(hours=index),
+        )
+
+    first_runs = client.get(f"{API_ROOT}/tasks/{APITask.name}/runs?limit=20&offset=0")
+    second_runs = client.get(f"{API_ROOT}/tasks/{APITask.name}/runs?limit=20&offset=20")
+    first_logs = client.get(
+        f"{API_ROOT}/task-runs/{selected.id}/logs?limit=20&offset=0&order=desc"
+    )
+    second_logs = client.get(
+        f"{API_ROOT}/task-runs/{selected.id}/logs?limit=20&offset=20&order=desc"
+    )
+
+    assert [run["id"] for run in first_runs.json()["data"]] == list(range(25, 5, -1))
+    assert [run["id"] for run in second_runs.json()["data"]] == [5, 4, 3, 2, 1]
+    assert first_runs.json()["meta"]["total"] == 25
+    assert second_runs.json()["meta"]["total"] == 25
+    assert [log["message"] for log in first_logs.json()["data"]] == [
+        f"log-{index}" for index in range(24, 4, -1)
+    ]
+    assert [log["message"] for log in second_logs.json()["data"]] == [
+        f"log-{index}" for index in range(4, -1, -1)
+    ]
+    assert first_logs.json()["meta"]["total"] == 25
+    assert second_logs.json()["meta"]["total"] == 25
+
+
+def test_itiger_token_is_persisted_in_task_configuration(
+    api: tuple[TestClient, ConfigService],
+) -> None:
+    client, config = api
+    revision = config.get().revision
+
+    response = client.put(
+        f"{API_ROOT}/tasks/{SyncUniversesTask.name}/config",
+        json={
+            "expected_revision": revision,
+            "params": {"universe_codes": [], "itiger_token": "configured-token"},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["params"]["itiger_token"] == "********"
+    assert (
+        config.get().tasks[SyncUniversesTask.name].params["itiger_token"]
+        == "configured-token"
+    )
+    description = UniverseSyncParams.model_json_schema()["properties"]["itiger_token"][
+        "description"
+    ]
+    assert "保存到配置文件" in description
+    assert "不会保存到配置" not in description
+
+
+def test_masked_itiger_token_preserves_the_saved_secret_on_task_update(
+    api: tuple[TestClient, ConfigService],
+) -> None:
+    client, config = api
+    first = client.put(
+        f"{API_ROOT}/tasks/{SyncUniversesTask.name}/config",
+        json={
+            "expected_revision": config.get().revision,
+            "params": {"universe_codes": [], "itiger_token": "configured-token"},
+        },
+    )
+    assert first.status_code == 200
+
+    second = client.put(
+        f"{API_ROOT}/tasks/{SyncUniversesTask.name}/config",
+        json={
+            "expected_revision": config.get().revision,
+            "params": {"universe_codes": ["hstech"], "itiger_token": "********"},
+        },
+    )
+
+    assert second.status_code == 200
+    assert second.json()["data"]["params"]["itiger_token"] == "********"
+    assert (
+        config.get().tasks[SyncUniversesTask.name].params["itiger_token"]
+        == "configured-token"
+    )
+    assert "configured-token" not in client.get(f"{API_ROOT}/tasks").text
 
 
 def test_invalid_configs_params_and_missing_resources_are_sanitized(

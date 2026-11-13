@@ -1,6 +1,7 @@
 """Frozen, strictly validated configuration models."""
 
 from typing import Literal, Self
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter
@@ -24,6 +25,8 @@ ALLOWED_MARKET_PROVIDERS = {
     "crypto": frozenset({"binance", "okx"}),
 }
 CRON_FIELD_COUNT = 5
+ALLOWED_PROXY_SCHEMES = frozenset({"http", "https", "socks5", "socks5h"})
+MAX_PROXY_URL_LENGTH = 2_048
 
 
 class FrozenSettingsModel(BaseModel):
@@ -46,10 +49,11 @@ class CryptoSymbol(FrozenSettingsModel):
 
 
 class MarketSettings(FrozenSettingsModel):
-    """Provider and request timeout for one market."""
+    """Provider, optional proxy, and request timeout for one market."""
 
     provider: str = Field(min_length=1)
     request_timeout_seconds: float = Field(default=20, gt=0, le=300)
+    proxy_url: str | None = Field(default=None, max_length=MAX_PROXY_URL_LENGTH)
 
     @field_validator("provider")
     @classmethod
@@ -57,6 +61,36 @@ class MarketSettings(FrozenSettingsModel):
         if not value.strip():
             raise ValueError("Market provider must not be blank")
         return value
+
+    @field_validator("proxy_url", mode="before")
+    @classmethod
+    def proxy_url_must_be_valid(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("Invalid proxy URL")
+        normalized = value.strip()
+        if not normalized:
+            return None
+        if any(ord(character) < 32 or ord(character) == 127 for character in normalized):
+            raise ValueError("Invalid proxy URL")
+        try:
+            parsed = urlsplit(normalized)
+            hostname = parsed.hostname
+            port = parsed.port
+        except ValueError:
+            raise ValueError("Invalid proxy URL") from None
+        if (
+            parsed.scheme not in ALLOWED_PROXY_SCHEMES
+            or not hostname
+            or port is None
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("Invalid proxy URL")
+        return normalized
 
 
 class TaskSettings(FrozenSettingsModel):
@@ -123,4 +157,6 @@ class Settings(FrozenSettingsModel):
                     f"provider {market.provider!r} is not allowed for "
                     f"market {name!r}; expected {sorted(allowed_providers)}"
                 )
+            if market.provider == "baostock" and market.proxy_url is not None:
+                raise ValueError("BaoStock does not support proxy configuration")
         return self

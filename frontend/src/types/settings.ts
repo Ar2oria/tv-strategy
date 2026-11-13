@@ -3,6 +3,24 @@ import type { JsonObject } from "./api";
 export interface MarketSettings {
   provider: string;
   request_timeout_seconds: number;
+  proxy_url: string | null;
+}
+
+export interface NetworkTestRequest {
+  symbol: string;
+}
+
+export interface NetworkTestResult {
+  market: string;
+  provider: string;
+  symbol: string;
+  connected: boolean;
+  latency_ms: number;
+  price: number | null;
+  price_date: string | null;
+  currency: string | null;
+  error_type: string | null;
+  detail: string | null;
 }
 
 export interface TaskSettings {

@@ -8,7 +8,11 @@ import pytest
 
 import app.providers.invesco_universe as adapter
 from app.providers.base import UniverseProvider
-from app.providers.errors import ProviderCompatibilityError, ProviderDataInvalid
+from app.providers.errors import (
+    ProviderCompatibilityError,
+    ProviderDataInvalid,
+    ProviderUnavailable,
+)
 
 EFFECTIVE_DATE = "2026-01-30"
 _DEFAULT_NAME = object()
@@ -203,7 +207,8 @@ def test_provider_downloads_bounded_verified_json_and_builds_current_snapshot(
         "holdings/fund?idType=ticker&interval=monthly&productType=ETF",
         max_bytes=adapter.QQQ_MAX_BYTES,
         timeout=adapter.QQQ_TIMEOUT_SECONDS,
-        expected_content_type="application/json",
+        expected_content_type=("application/json", "text/plain"),
+        proxy_url=None,
     )
     assert download.call_args.kwargs["max_bytes"] > 0
     assert download.call_args.kwargs["timeout"] > 0
@@ -224,6 +229,19 @@ def test_provider_downloads_bounded_verified_json_and_builds_current_snapshot(
     assert index.provider_symbol == "^NDX"
     assert index.instrument_type == "index"
     assert index not in snapshot.members
+
+
+def test_provider_forwards_its_market_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    download = Mock(side_effect=ProviderUnavailable())
+    monkeypatch.setattr(adapter, "fetch_bytes", download)
+    proxy_url = "http://127.0.0.1:8080"
+
+    with pytest.raises(ProviderUnavailable):
+        adapter.InvescoUniverseProvider(proxy_url=proxy_url).fetch_universe("nasdaq100")
+
+    assert download.call_args.kwargs["proxy_url"] == proxy_url
 
 
 @pytest.mark.parametrize(

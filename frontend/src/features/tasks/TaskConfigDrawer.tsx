@@ -11,6 +11,7 @@ const TASK_FORM_CONTEXT = { labelAlign: "left", colSpan: 24 } as const;
 const TASK_UI_SCHEMA = {
   universe_codes: { "ui:widget": "commaSeparated" },
   symbols: { "ui:widget": "commaSeparated" },
+  itiger_token: { "ui:widget": "password" },
 } as const;
 const TASK_WIDGETS = { commaSeparated: CommaSeparatedWidget };
 
@@ -72,7 +73,14 @@ export function TaskConfigDrawer({
     }
     setCronError(null);
     setParams(submitted);
-    onSave({ cron: cron.trim(), enabled, params: { ...submitted } });
+    const token =
+      typeof submitted.itiger_token === "string"
+        ? submitted.itiger_token.trim()
+        : "";
+    const { itiger_token: _ignored, ...remaining } = submitted;
+    const outgoing =
+      token === "" ? remaining : { ...remaining, itiger_token: token };
+    onSave({ cron: cron.trim(), enabled, params: outgoing });
   };
 
   return (

@@ -23,6 +23,7 @@ import {
   listTasks,
   putSettings,
   startTaskRun,
+  testMarketNetwork,
   updateTaskConfig,
 } from "./endpoints";
 import { ApiError } from "./errors";
@@ -135,7 +136,11 @@ describe("typed endpoints", () => {
     expect(fetched.data.markets.a_share).toEqual({
       provider: "akshare",
       request_timeout_seconds: 20,
+      proxy_url: null,
     });
+    expect(fetched.data.markets.hk_stock.proxy_url).toBe(
+      "socks5h://127.0.0.1:1081",
+    );
     for (const market of Object.values(fetched.data.markets)) {
       expect(market).not.toHaveProperty("history_years");
       expect(market).not.toHaveProperty("overlap_days");
@@ -151,6 +156,30 @@ describe("typed endpoints", () => {
     const [, init] = fetchMock.mock.calls[1] ?? [];
     expect(init?.method).toBe("PUT");
     expect(JSON.parse(String(init?.body))).toEqual(update);
+  });
+
+  it("posts a market network test and decodes price diagnostics", async () => {
+    const payload = {
+      market: "crypto",
+      provider: "binance",
+      symbol: "BINANCE:BTC/USDT",
+      connected: true,
+      latency_ms: 12.3,
+      price: 74015.19,
+      price_date: "2026-11-11",
+      currency: "USDT",
+      error_type: null,
+      detail: null,
+    };
+    mockSuccess(payload);
+
+    const result = await testMarketNetwork("crypto", { symbol: "BTC/USDT" });
+
+    expect(result.data).toEqual(payload);
+    const [path, init] = fetchMock.mock.calls[0] ?? [];
+    expect(path).toBe("/api/v1/settings/markets/crypto/network-test");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({ symbol: "BTC/USDT" });
   });
 
   it("decodes task catalog, config, run history, and logs", async () => {
@@ -231,6 +260,11 @@ describe("typed endpoints", () => {
       name: "indicators",
       payload: [{ ...indicatorDescriptorPayload, name: 42 }],
       request: () => listIndicators(),
+    },
+    {
+      name: "network test",
+      payload: { connected: "yes" },
+      request: () => testMarketNetwork("crypto", { symbol: "BTC/USDT" }),
     },
     {
       name: "tasks",

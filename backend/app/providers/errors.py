@@ -5,7 +5,7 @@ import re
 from numbers import Real
 
 MAX_PROVIDER_DETAIL_LENGTH = 500
-_URL_PATTERN = re.compile(r"\bhttps?://\S+", re.IGNORECASE)
+_URL_PATTERN = re.compile(r"\b(?:https?|socks5h?)://\S+", re.IGNORECASE)
 _SECRET_PATTERN = re.compile(
     r"\b(api[_-]?key|access[_-]?token|password|credential|secret)"
     r"(\s*[=:]\s*)([^\s,;]+)",
@@ -85,6 +85,15 @@ class ProviderRateLimited(ProviderError):
     """The upstream provider rejected a request because of rate limits."""
 
     default_message = "Market-data provider rate limit exceeded"
+
+
+class ProviderBusy(ProviderError):
+    """A process-global SDK is busy and the caller declined to wait."""
+
+    default_message = "Data source is currently in use, retry later"
+
+    def __init__(self) -> None:
+        super().__init__(detail=self.default_message)
 
 
 class ProviderDataInvalid(ProviderError):

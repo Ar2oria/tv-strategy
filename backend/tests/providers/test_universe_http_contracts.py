@@ -4,37 +4,24 @@ from unittest.mock import Mock
 
 import pytest
 
-import app.providers.hstech_universe as hstech
 import app.providers.invesco_universe as invesco
 import app.providers.ishares_soxx as ishares
 from app.providers.errors import ProviderUnavailable
 
-VERIFIED_HSTECH_URL = (
-    "https://www.hsi.com.hk/api/wsit-hsi-ddoc-ea-public-website-proxy/v1/"
-    "content/gcs/download?resource=%2Fpublic-website%2Fwebapp%2Ffactsheets%2F"
-    "en-hk%2Fhstech.pdf"
-)
-
-
-def test_hstech_uses_controller_verified_official_pdf_url() -> None:
-    assert hstech.HSTECH_FACTSHEET_URL == VERIFIED_HSTECH_URL
-
-
 @pytest.mark.parametrize(
     ("module", "provider_type", "code", "expected_content_type"),
     [
-        (hstech, hstech.HstechUniverseProvider, "hstech", "application/pdf"),
         (
             invesco,
             invesco.InvescoUniverseProvider,
             "nasdaq100",
-            "application/json",
+            ("application/json", "text/plain"),
         ),
         (
             ishares,
             ishares.IsharesSoxxUniverseProvider,
             "soxx",
-            "text/csv",
+            ("text/csv", "text/plain"),
         ),
     ],
 )
@@ -43,7 +30,7 @@ def test_universe_download_uses_configured_timeout_and_expected_content_type(
     module: object,
     provider_type: type,
     code: str,
-    expected_content_type: str,
+    expected_content_type: str | tuple[str, ...],
 ) -> None:
     download = Mock(side_effect=ProviderUnavailable())
     monkeypatch.setattr(module, "fetch_bytes", download)

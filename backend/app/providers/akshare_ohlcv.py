@@ -5,11 +5,13 @@ from collections.abc import Callable
 from datetime import date
 
 import akshare as ak
+from akshare.utils.http import Push2RateLimitError
 
 from app.domain.dto import Adjustment, BarDTO, InstrumentDTO
 from app.providers.errors import (
     ProviderCompatibilityError,
     ProviderDataInvalid,
+    ProviderRateLimited,
     ProviderUnavailable,
 )
 from app.providers.ohlcv_normalization import (
@@ -21,6 +23,7 @@ from app.providers.ohlcv_normalization import (
     validate_fetch_range,
     validate_instrument,
 )
+from app.providers.sdk_runtime import provider_runtime
 from app.providers.timeouts import (
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
     validate_request_timeout,
@@ -29,6 +32,9 @@ from app.providers.validation import validate_bars
 
 logger = logging.getLogger(__name__)
 SOURCE = "akshare"
+PUSH2_RATE_LIMIT_DETAIL = (
+    "Eastmoney push2 rate limit exceeded, wait before resuming synchronization"
+)
 SHARES_PER_LOT = 100
 FULL_HISTORY_START = date(1970, 1, 1)
 CHINESE_COLUMNS = OhlcvColumns(
@@ -56,15 +62,21 @@ class AkshareOhlcvProvider:
         self,
         *,
         request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        proxy_url: str | None = None,
     ) -> None:
         # AKShare has no common native timeout argument; services bound waiting.
         self._request_timeout_seconds = validate_request_timeout(
             request_timeout_seconds
         )
+        self._proxy_url = proxy_url
 
     @property
     def request_timeout_seconds(self) -> float:
         return self._request_timeout_seconds
+
+    @property
+    def proxy_url(self) -> str | None:
+        return self._proxy_url
 
     def fetch_daily(
         self,
@@ -101,6 +113,7 @@ class AkshareOhlcvProvider:
             _require_adjustment(adjustment, "qfq", "A-share stocks")
             frame = _request(
                 ak.stock_zh_a_hist,
+                proxy_url=self._proxy_url,
                 symbol=symbol,
                 period="daily",
                 start_date=dates[0],
@@ -111,6 +124,7 @@ class AkshareOhlcvProvider:
             _require_adjustment(adjustment, "none", "A-share indices")
             frame = _request(
                 ak.index_zh_a_hist,
+                proxy_url=self._proxy_url,
                 symbol=symbol,
                 period="daily",
                 start_date=dates[0],
@@ -139,6 +153,7 @@ class AkshareOhlcvProvider:
             dates = _akshare_dates(start, end)
             frame = _request(
                 ak.stock_hk_hist,
+                proxy_url=self._proxy_url,
                 symbol=normalize_hk_stock_symbol(instrument.provider_symbol),
                 period="daily",
                 start_date=dates[0],
@@ -152,7 +167,11 @@ class AkshareOhlcvProvider:
             )
         _require_adjustment(adjustment, "none", "Hong Kong indices")
         _require_hstech(instrument.provider_symbol)
-        frame = _request(ak.stock_hk_index_daily_em, symbol="HSTECH")
+        frame = _request(
+            ak.stock_hk_index_daily_em,
+            proxy_url=self._proxy_url,
+            symbol="HSTECH",
+        )
         return _normalize_frame(frame, HSTECH_COLUMNS, adjustment)
 
 
@@ -176,12 +195,26 @@ def _normalize_frame(
     return validate_bars(bars)
 
 
-def _request(function: Callable[..., object], **kwargs: object) -> object:
+def _request(
+    function: Callable[..., object],
+    *,
+    proxy_url: str | None = None,
+    **kwargs: object,
+) -> object:
     try:
-        return function(**kwargs)
+        with provider_runtime("akshare", proxy_url, wait=True):
+            return function(**kwargs)
+    except Push2RateLimitError as error:
+        logger.warning("AKShare Eastmoney push2 rate limit")
+        raise ProviderRateLimited(detail=PUSH2_RATE_LIMIT_DETAIL) from error
     except Exception as error:
-        logger.exception("AKShare request failed for symbol %s", kwargs.get("symbol"))
-        raise ProviderUnavailable() from error
+        logger.error(
+            "AKShare request failed for symbol %s (%s)",
+            kwargs.get("symbol"),
+            type(error).__name__,
+        )
+        detail = f"AKShare daily request failed ({type(error).__name__})"
+        raise ProviderUnavailable(detail=detail) from error
 
 
 def _akshare_dates(start: date | None, end: date) -> tuple[str, str]:

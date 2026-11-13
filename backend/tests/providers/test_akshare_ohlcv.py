@@ -1,11 +1,14 @@
 """Offline SDK translation tests for AKShare daily OHLCV bars."""
 
+import logging
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import date, datetime
 from unittest.mock import Mock
 
 import pandas as pd
 import pytest
+from akshare.utils.http import Push2RateLimitError
 
 import app.providers.akshare_ohlcv as adapter
 from app.domain.dto import BarDTO, InstrumentDTO
@@ -13,6 +16,7 @@ from app.providers.base import OhlcvProvider
 from app.providers.errors import (
     ProviderCompatibilityError,
     ProviderDataInvalid,
+    ProviderRateLimited,
     ProviderUnavailable,
 )
 
@@ -346,7 +350,9 @@ def test_invalid_a_share_symbols_fail_before_sdk_call(
 
 def test_upstream_failure_and_invalid_range_use_typed_errors(
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level(logging.ERROR, logger="app.providers.akshare_ohlcv")
     monkeypatch.setattr(
         adapter.ak, "stock_zh_a_hist", Mock(side_effect=RuntimeError("secret upstream"))
     )
@@ -355,7 +361,54 @@ def test_upstream_failure_and_invalid_range_use_typed_errors(
     with pytest.raises(ProviderUnavailable) as error:
         provider.fetch_daily(A_STOCK, None, date(2026, 1, 3), "qfq")
     assert "secret upstream" not in str(error.value)
+    assert error.value.detail == "AKShare daily request failed (RuntimeError)"
+    assert "secret upstream" not in caplog.text
+    assert "Traceback" not in caplog.text
+    assert "RuntimeError" in caplog.text
     with pytest.raises(ProviderDataInvalid):
         provider.fetch_daily(
             A_STOCK, date(2026, 1, 4), date(2026, 1, 3), "qfq"
         )
+
+
+def test_push2_rate_limit_preserves_actionable_throttling_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        adapter.ak,
+        "stock_zh_a_hist",
+        Mock(side_effect=Push2RateLimitError("raw upstream message")),
+    )
+
+    with pytest.raises(ProviderRateLimited) as captured:
+        adapter.AkshareOhlcvProvider().fetch_daily(
+            A_STOCK, None, date(2026, 1, 3), "qfq"
+        )
+
+    assert captured.value.detail == (
+        "Eastmoney push2 rate limit exceeded, wait before resuming synchronization"
+    )
+    assert "raw upstream message" not in (captured.value.detail or "")
+
+
+def test_akshare_ohlcv_uses_shared_runtime_with_its_market_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str | None, bool]] = []
+
+    @contextmanager
+    def fake_runtime(provider_name: str, proxy_url: str | None, *, wait: bool):
+        calls.append((provider_name, proxy_url, wait))
+        yield
+
+    monkeypatch.setattr(adapter, "provider_runtime", fake_runtime)
+    monkeypatch.setattr(
+        adapter.ak, "stock_zh_a_hist", Mock(return_value=pd.DataFrame())
+    )
+    proxy_url = "socks5://127.0.0.1:1080"
+
+    adapter.AkshareOhlcvProvider(proxy_url=proxy_url).fetch_daily(
+        A_STOCK, None, date(2026, 1, 3), "qfq"
+    )
+
+    assert calls == [("akshare", proxy_url, True)]

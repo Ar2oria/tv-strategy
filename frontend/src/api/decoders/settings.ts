@@ -1,6 +1,7 @@
 import type {
   IndicatorSettings,
   MarketSettings,
+  NetworkTestResult,
   Settings,
   TaskSettings,
 } from "../../types/settings";
@@ -10,6 +11,7 @@ import {
   decodeJsonObject,
   decodeLiteral,
   decodeNonNegativeInteger,
+  decodeNullable,
   decodePositiveInteger,
   decodeRecord,
   decodeRecordOf,
@@ -21,6 +23,26 @@ function decodeMarketSettings(value: unknown): MarketSettings {
   return {
     provider: decodeString(item.provider),
     request_timeout_seconds: decodeFiniteNumber(item.request_timeout_seconds),
+    proxy_url:
+      item.proxy_url === undefined
+        ? null
+        : decodeNullable(item.proxy_url, decodeString),
+  };
+}
+
+export function decodeNetworkTestResult(value: unknown): NetworkTestResult {
+  const item = decodeRecord(value);
+  return {
+    market: decodeString(item.market),
+    provider: decodeString(item.provider),
+    symbol: decodeString(item.symbol),
+    connected: decodeBoolean(item.connected),
+    latency_ms: decodeFiniteNumber(item.latency_ms),
+    price: decodeNullable(item.price, decodeFiniteNumber),
+    price_date: decodeNullable(item.price_date, decodeString),
+    currency: decodeNullable(item.currency, decodeString),
+    error_type: decodeNullable(item.error_type, decodeString),
+    detail: decodeNullable(item.detail, decodeString),
   };
 }
 

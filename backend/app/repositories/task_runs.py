@@ -4,9 +4,9 @@ from copy import deepcopy
 from datetime import datetime
 from enum import Enum, auto
 from math import isfinite
-from typing import Any
+from typing import Any, Literal
 
-from sqlalchemy import delete, insert, select, update
+from sqlalchemy import delete, func, insert, select, update
 from sqlalchemy.orm import Session
 
 from app.db.database import SessionFactory
@@ -140,6 +140,13 @@ class TaskRunRepository:
         with self._sessions() as session:
             return [_run_dto(run) for run in session.scalars(statement).all()]
 
+    def count_runs(self, task_name: str | None = None) -> int:
+        statement = select(func.count()).select_from(TaskRun)
+        if task_name is not None:
+            statement = statement.where(TaskRun.task_name == task_name)
+        with self._sessions() as session:
+            return int(session.scalar(statement) or 0)
+
     def update_run(
         self,
         run_id: int,
@@ -260,18 +267,31 @@ class TaskRunRepository:
         *,
         limit: int | None = None,
         offset: int = 0,
+        order: Literal["asc", "desc"] = "asc",
     ) -> list[TaskLogDTO]:
         _validate_page(limit, offset)
+        if order not in {"asc", "desc"}:
+            raise ValueError("order must be asc or desc")
+        ordering = (
+            (TaskLog.created_at, TaskLog.id)
+            if order == "asc"
+            else (TaskLog.created_at.desc(), TaskLog.id.desc())
+        )
         statement = (
             select(TaskLog)
             .where(TaskLog.run_id == run_id)
-            .order_by(TaskLog.created_at, TaskLog.id)
+            .order_by(*ordering)
             .offset(offset)
         )
         if limit is not None:
             statement = statement.limit(limit)
         with self._sessions() as session:
             return [_log_dto(log) for log in session.scalars(statement).all()]
+
+    def count_logs(self, run_id: int) -> int:
+        statement = select(func.count()).select_from(TaskLog).where(TaskLog.run_id == run_id)
+        with self._sessions() as session:
+            return int(session.scalar(statement) or 0)
 
     def update_log(
         self,

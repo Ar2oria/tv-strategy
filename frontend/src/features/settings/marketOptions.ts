@@ -15,6 +15,17 @@ export const MARKET_LABELS: Readonly<Record<string, string>> = {
   crypto: "加密货币",
 };
 
+export const DEFAULT_NETWORK_TEST_SYMBOLS: Readonly<Record<string, string>> = {
+  a_share: "600519.SH",
+  hk_stock: "0700.HK",
+  us_stock: "AAPL",
+  crypto: "BTC/USDT",
+};
+
+export function defaultNetworkTestSymbol(market: string): string {
+  return DEFAULT_NETWORK_TEST_SYMBOLS[market] ?? "AAPL";
+}
+
 export function marketLabel(market: string): string {
   return MARKET_LABELS[market] ?? market;
 }

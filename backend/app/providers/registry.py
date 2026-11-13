@@ -3,7 +3,7 @@
 from collections.abc import Mapping
 from types import MappingProxyType
 
-from app.config.models import ALLOWED_MARKET_PROVIDERS, Settings
+from app.config.models import ALLOWED_MARKET_PROVIDERS, MarketSettings, Settings
 from app.providers.base import OhlcvProvider, UniverseProvider
 from app.providers.errors import (
     ProviderCompatibilityError,
@@ -56,6 +56,12 @@ class ProviderRegistry:
         self._universe_providers = MappingProxyType(
             dict(universe_providers or {})
         )
+
+    def market_settings(self, market: str) -> MarketSettings:
+        """Return one market's immutable configuration from this registry snapshot."""
+        if market not in ALLOWED_MARKET_PROVIDERS:
+            raise UnknownMarketError()
+        return self._settings.markets[market].model_copy(deep=True)
 
     def get_ohlcv(
         self,

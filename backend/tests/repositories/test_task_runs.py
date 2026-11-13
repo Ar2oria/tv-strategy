@@ -60,6 +60,41 @@ def test_task_run_and_log_crud(session_factory: SessionFactory) -> None:
     assert repository.delete_run(created.id) is False
 
 
+def test_runs_and_logs_support_descending_pages_with_totals(
+    session_factory: SessionFactory,
+) -> None:
+    repository = TaskRunRepository(session_factory)
+    runs = [
+        repository.create_run(
+            "history",
+            "manual",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(days=index),
+        )
+        for index in range(25)
+    ]
+    selected = runs[0]
+    for index in range(25):
+        repository.create_log(
+            selected.id,
+            "INFO",
+            f"log-{index}",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC) + timedelta(hours=index),
+        )
+
+    first_runs = repository.list_runs("history", limit=20, offset=0)
+    second_runs = repository.list_runs("history", limit=20, offset=20)
+    first_logs = repository.list_logs(selected.id, limit=20, offset=0, order="desc")
+    second_logs = repository.list_logs(selected.id, limit=20, offset=20, order="desc")
+
+    assert [run.id for run in first_runs] == list(range(25, 5, -1))
+    assert [run.id for run in second_runs] == [5, 4, 3, 2, 1]
+    assert repository.count_runs("history") == 25
+    assert [log.message for log in first_logs] == [f"log-{index}" for index in range(24, 4, -1)]
+    assert [log.message for log in second_logs] == [f"log-{index}" for index in range(4, -1, -1)]
+    assert repository.count_logs(selected.id) == 25
+    assert repository.list_logs(selected.id, limit=1)[0].message == "log-0"
+
+
 def test_stale_interruption_and_retention_delete_are_explicit(
     session_factory: SessionFactory,
 ) -> None:

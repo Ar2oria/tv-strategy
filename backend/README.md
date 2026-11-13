@@ -58,10 +58,18 @@ timezone, indicator, and Task changes made through the API are hot-applied with
 optimistic revision checks. Prefer the API while the server is running; edit the
 JSON directly only while stopped, then restart. A stale revision returns 409,
 and a failed post-persistence listener rolls back the file and runtime state.
-Each market retains only `provider` and `request_timeout_seconds` (greater
-than 0 and at most 300 seconds), both editable through the data-source settings
-page. Market settings contain no crypto pairs. The Hong Kong Yahoo fallback is
-canonically named `yfinance`, matching its bar source metadata. Crypto Task
+Each market retains `provider`, `request_timeout_seconds` (greater than 0 and
+at most 300 seconds), and an optional `proxy_url`. Proxy URLs support `http`,
+`https`, `socks5`, and `socks5h`, require an explicit host and port, and reject
+embedded credentials. A null/blank proxy means direct access without inheriting
+ambient proxy environment variables. BaoStock uses a proprietary TCP protocol,
+so `provider=baostock` plus a proxy is rejected instead of silently bypassing it.
+AKShare and yfinance have process-global SDK proxy state: formal Tasks wait for
+the corresponding SDK runtime lock, while network tests return `ProviderBusy`
+immediately rather than waiting. CCXT and owned HTTP clients use isolated
+per-instance proxy configuration. Market settings contain no crypto pairs. The
+Hong Kong Yahoo fallback is canonically named `yfinance`, matching its bar
+source metadata. Crypto Task
 `spot_pairs` accept only exact uppercase `BASE/QUOTE` spot pairs; lowercase,
 derivative, malformed, or whitespace-padded entries are rejected before the
 JSON is saved.
@@ -82,10 +90,17 @@ Useful endpoints are:
 ```text
 GET /api/v1/settings
 PUT /api/v1/settings                         # complete document + expected_revision
+POST /api/v1/settings/markets/{market}/network-test  # {"symbol":"AAPL"}
 GET /api/v1/tasks
 GET /api/v1/tasks/{task_name}/config
 PUT /api/v1/tasks/{task_name}/config         # expected_revision + changes
 ```
+
+The network-test endpoint uses the saved provider/proxy/timeout and a bounded
+31-day daily-bar request. It returns connectivity, elapsed milliseconds, and the
+latest available daily close/date; it never writes settings, bars, or Task
+history. Empty data is `NoDataAvailable`, an occupied SDK is `ProviderBusy`, and
+other provider errors retain their sanitized type/detail.
 
 All built-in Tasks ship disabled with `cron: "0 0 * * *"`. Parameters otherwise
 use the defaults below; the crypto daily Task starts with the same default
@@ -242,6 +257,15 @@ hidden APIs, or ignore regional terms.
 - Starting the same Task while it is active creates a durable `skipped` overlap
   run rather than a second concurrent execution.
 
+Run logs retain structured `error_type` and sanitized `detail` alongside symbols
+or universe codes. The history view renders only whitelisted diagnostic fields,
+with blue `INFO` and red `ERROR` level tags rather than identical plain text.
+Unexpected runner failures expose only the safe exception class, never raw
+credentials, proxy URLs, upstream bodies, or tracebacks. Run history is returned
+latest-first, and log queries accept `order=desc` (the API default) or `asc`.
+Run/log list responses include `total` alongside the page `count`, `limit`, and
+`offset`, so clients can paginate 20 items per page without losing older rows.
+
 Every provider fetch is a single attempt: availability, rate-limit, timeout,
 and schema failures are surfaced as real errors without an automatic retry.
 `Retry-After` metadata may remain in diagnostics but never schedules another
@@ -300,12 +324,19 @@ history. Stop the single process to stop all scheduling.
   repeated, non-advancing, duplicate, out-of-window, and page-cap responses fail
   rather than becoming a complete partial history.
 - **Universe downloads:** these are current snapshots, not historical
-  constituents. CSI 300 and exchange-board lists come through AKShare; HSTECH
-  comes from the verified official factsheet PDF at
-  `https://www.hsi.com.hk/api/wsit-hsi-ddoc-ea-public-website-proxy/v1/content/gcs/download?resource=%2Fpublic-website%2Fwebapp%2Ffactsheets%2Fen-hk%2Fhstech.pdf`.
-  The PDF is byte-bounded, content-type checked, and parsed with `pypdf`; its
-  declared count and schema remain mandatory, and failure preserves the last
-  valid membership. Nasdaq-100 selection uses current Invesco QQQ equity holdings; SOXX uses
+  constituents. CSI 300 and exchange-board lists come through AKShare. HSTECH
+  uses only the paginated iTiger API with 20 rows per page, validating
+  `totalCount`, `totalPage`, page metadata, and duplicates. Scheduled and normal
+  manual runs first read the bearer token from the Task's persisted
+  `itiger_token` parameter in the local, Git-ignored `config/settings.json`.
+  Configuration APIs return a fixed mask instead of the secret; saving that
+  mask unchanged preserves the stored token, while clearing it selects the
+  fallback. Resolution then uses `ITIGER_BEARER_TOKEN`, followed by the original
+  local token in `config/itiger_token.txt` (also ignored by Git). An explicit
+  API override applies only to that run. Tokens are redacted from Task history
+  and logs. If none of these sources contains a token, an explicit configuration
+  error is raised rather than silently selecting another provider.
+  Nasdaq-100 selection uses current Invesco QQQ equity holdings; SOXX uses
   current iShares equity holdings. Fund holdings/source methodology can differ
   from an index provider's official list. Never assert a permanent constituent
   count.

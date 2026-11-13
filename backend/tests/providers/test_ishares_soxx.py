@@ -7,7 +7,11 @@ import pytest
 
 import app.providers.ishares_soxx as adapter
 from app.providers.base import UniverseProvider
-from app.providers.errors import ProviderCompatibilityError, ProviderDataInvalid
+from app.providers.errors import (
+    ProviderCompatibilityError,
+    ProviderDataInvalid,
+    ProviderUnavailable,
+)
 
 SOXX_URL = (
     "https://www.ishares.com/us/products/239705/ishares-semiconductor-etf/"
@@ -150,7 +154,8 @@ def test_provider_downloads_bounded_official_csv_and_builds_current_snapshot(
         SOXX_URL,
         max_bytes=adapter.SOXX_MAX_BYTES,
         timeout=adapter.SOXX_TIMEOUT_SECONDS,
-        expected_content_type="text/csv",
+        expected_content_type=("text/csv", "text/plain"),
+        proxy_url=None,
     )
     assert download.call_args.kwargs["max_bytes"] > 0
     assert download.call_args.kwargs["timeout"] > 0
@@ -165,6 +170,19 @@ def test_provider_downloads_bounded_official_csv_and_builds_current_snapshot(
     assert etf.provider_symbol == "SOXX"
     assert etf.instrument_type == "etf"
     assert etf not in snapshot.members
+
+
+def test_provider_forwards_its_market_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    download = Mock(side_effect=ProviderUnavailable())
+    monkeypatch.setattr(adapter, "fetch_bytes", download)
+    proxy_url = "http://127.0.0.1:8080"
+
+    with pytest.raises(ProviderUnavailable):
+        adapter.IsharesSoxxUniverseProvider(proxy_url=proxy_url).fetch_universe("soxx")
+
+    assert download.call_args.kwargs["proxy_url"] == proxy_url
 
 
 @pytest.mark.parametrize("holdings_date", ["", "30 Jan 2026", "Feb 30, 2026"])

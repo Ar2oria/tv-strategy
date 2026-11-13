@@ -2,7 +2,6 @@
 
 import logging
 from datetime import date
-from threading import Lock
 
 import baostock as bs
 
@@ -19,6 +18,7 @@ from app.providers.ohlcv_normalization import (
     validate_fetch_range,
     validate_instrument,
 )
+from app.providers.sdk_runtime import provider_runtime
 from app.providers.timeouts import (
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
     validate_request_timeout,
@@ -49,9 +49,6 @@ EXCHANGE_PREFIXES = {
     "BSE": "bj",
     "BJ": "bj",
 }
-BAOSTOCK_LOCK = Lock()
-
-
 class BaoStockOhlcvProvider:
     """Use one anonymous SDK session at a time across every provider instance."""
 
@@ -79,7 +76,7 @@ class BaoStockOhlcvProvider:
         validate_instrument(instrument)
         validate_fetch_range(start, end)
         code, adjustflag = _request_spec(instrument, adjustment)
-        with BAOSTOCK_LOCK:
+        with provider_runtime("baostock", None, wait=True):
             return _fetch_in_session(code, adjustflag, start, end, adjustment)
 
 

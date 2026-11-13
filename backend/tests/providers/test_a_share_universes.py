@@ -1,5 +1,6 @@
 """Offline normalization tests for current AKShare A-share universes."""
 
+from contextlib import contextmanager
 from datetime import date, datetime
 from unittest.mock import Mock
 
@@ -350,6 +351,27 @@ def test_upstream_failure_is_sanitized_and_typed(
     with pytest.raises(ProviderUnavailable) as captured:
         adapter.AkshareUniverseProvider().fetch_universe("csi300")
     assert "private upstream detail" not in str(captured.value)
+
+
+def test_akshare_universe_uses_shared_runtime_with_its_market_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str | None, bool]] = []
+
+    @contextmanager
+    def fake_runtime(provider_name: str, proxy_url: str | None, *, wait: bool):
+        calls.append((provider_name, proxy_url, wait))
+        yield
+
+    monkeypatch.setattr(adapter, "provider_runtime", fake_runtime)
+    patch_reader(
+        monkeypatch, "index_stock_cons_csindex", pd.DataFrame([csi_row()])
+    )
+    proxy_url = "socks5://127.0.0.1:1080"
+
+    adapter.AkshareUniverseProvider(proxy_url=proxy_url).fetch_universe("csi300")
+
+    assert calls == [("akshare", proxy_url, True)]
 
 
 def test_unknown_universe_fails_before_any_sdk_call(

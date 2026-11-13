@@ -22,6 +22,7 @@ from app.providers.ohlcv_normalization import (
     validate_instrument,
 )
 from app.providers.retry import retry_after_from_error
+from app.providers.sdk_runtime import provider_runtime
 from app.providers.timeouts import (
     DEFAULT_REQUEST_TIMEOUT_SECONDS,
     validate_request_timeout,
@@ -44,14 +45,20 @@ class YahooOhlcvProvider:
         self,
         *,
         request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        proxy_url: str | None = None,
     ) -> None:
         self._request_timeout_seconds = validate_request_timeout(
             request_timeout_seconds
         )
+        self._proxy_url = proxy_url
 
     @property
     def request_timeout_seconds(self) -> float:
         return self._request_timeout_seconds
+
+    @property
+    def proxy_url(self) -> str | None:
+        return self._proxy_url
 
     def fetch_daily(
         self,
@@ -74,6 +81,7 @@ class YahooOhlcvProvider:
             end=exclusive_end.isoformat(),
             adjustment=adjustment,
             timeout=self._request_timeout_seconds,
+            proxy_url=self._proxy_url,
         )
         bars = _normalize_history(
             frame,
@@ -154,15 +162,17 @@ def _request(
     end: str,
     adjustment: Adjustment,
     timeout: float,
+    proxy_url: str | None = None,
 ) -> object:
     try:
-        return yf.Ticker(symbol).history(
-            interval="1d",
-            start=start,
-            end=end,
-            auto_adjust=adjustment == "qfq",
-            timeout=timeout,
-        )
+        with provider_runtime("yfinance", proxy_url, wait=True):
+            return yf.Ticker(symbol).history(
+                interval="1d",
+                start=start,
+                end=end,
+                auto_adjust=adjustment == "qfq",
+                timeout=timeout,
+            )
     except YFRateLimitError as error:
         logger.warning("Yahoo rate limit for %s", symbol)
         raise ProviderRateLimited(

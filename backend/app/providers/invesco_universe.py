@@ -45,14 +45,20 @@ class InvescoUniverseProvider:
         self,
         *,
         request_timeout_seconds: float = DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        proxy_url: str | None = None,
     ) -> None:
         self._request_timeout_seconds = validate_request_timeout(
             request_timeout_seconds
         )
+        self._proxy_url = proxy_url
 
     @property
     def request_timeout_seconds(self) -> float:
         return self._request_timeout_seconds
+
+    @property
+    def proxy_url(self) -> str | None:
+        return self._proxy_url
 
     def fetch_universe(self, universe_code: str) -> UniverseSnapshot:
         if universe_code != "nasdaq100":
@@ -63,7 +69,8 @@ class InvescoUniverseProvider:
             QQQ_HOLDINGS_URL,
             max_bytes=QQQ_MAX_BYTES,
             timeout=self._request_timeout_seconds,
-            expected_content_type="application/json",
+            expected_content_type=("application/json", "text/plain"),
+            proxy_url=self._proxy_url,
         )
         payload = _decode_payload(content)
         rows = _holding_rows(payload)

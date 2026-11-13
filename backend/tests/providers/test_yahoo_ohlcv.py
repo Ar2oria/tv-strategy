@@ -1,5 +1,6 @@
 """Offline yfinance translation and symbol-mapping tests."""
 
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import date, timedelta
 from unittest.mock import Mock
@@ -382,3 +383,24 @@ def test_invalid_provider_symbols_fail_before_sdk(
             "qfq",
         )
     constructor.assert_not_called()
+
+
+def test_yahoo_ohlcv_uses_shared_runtime_with_its_market_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[tuple[str, str | None, bool]] = []
+
+    @contextmanager
+    def fake_runtime(provider_name: str, proxy_url: str | None, *, wait: bool):
+        calls.append((provider_name, proxy_url, wait))
+        yield
+
+    monkeypatch.setattr(adapter, "provider_runtime", fake_runtime)
+    patch_history(monkeypatch, history_frame())
+    proxy_url = "http://127.0.0.1:8080"
+
+    adapter.YahooOhlcvProvider(proxy_url=proxy_url).fetch_daily(
+        US_STOCK, date(2026, 1, 2), date(2026, 1, 3), "qfq"
+    )
+
+    assert calls == [("yfinance", proxy_url, True)]
